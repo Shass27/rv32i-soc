@@ -1,0 +1,182 @@
+# =============================================================================
+# OS
+# =============================================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+.TemporaryItems
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+*~
+.nfs*
+
+
+# =============================================================================
+# EDITOR — VS Code
+# =============================================================================
+
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/tasks.json
+!.vscode/launch.json
+*.code-workspace
+
+
+# =============================================================================
+# ICARUS VERILOG
+# =============================================================================
+
+# Compiled simulation binaries
+*.vvp
+a.out
+
+# VCD / FST waveform dumps
+*.vcd
+*.fst
+*.lxt
+*.lxt2
+
+# Surfer / GTKWave save files
+*.gtkw
+*.sav
+
+
+# =============================================================================
+# VIVADO
+# =============================================================================
+
+# Generated project directories (the .xpr file is the portable entry point)
+*.cache/
+*.hw/
+*.ip_user_files/
+*.sim/
+*.runs/
+*.sdk/
+*.srcs/sources_1/ip/
+*.gen/
+
+# Vivado log and journal files
+*.log
+*.jou
+*.str
+vivado_*.backup.log
+vivado_*.backup.jou
+
+# Bitstream and device-specific outputs — commit only if intentional
+*.bit
+*.bin
+*.mcs
+*.prm
+*.ltx
+
+# Checkpoint and implementation reports (reproducible from sources)
+*.dcp
+*.rpt
+*.xpe
+*.xsa
+
+# HLS project output
+solution*/
+hls_prj/
+*.ap_*
+
+# Timing summary / utilization — can commit selectively if desired
+# *.util.rpt
+# *.timing.rpt
+
+
+# =============================================================================
+# VERILATOR
+# =============================================================================
+
+obj_dir/
+*.o
+*.a
+V*.mk
+V*.cpp
+V*.h
+verilated.cpp
+verilated.h
+verilated_*.cpp
+verilated_*.h
+
+
+# =============================================================================
+# RISC-V GCC TOOLCHAIN OUTPUT
+# =============================================================================
+
+# Object files and archives
+*.o
+*.a
+*.d
+
+# Linked ELF binaries
+*.elf
+
+# Flat binary / hex dumps for memory initialisation
+*.bin
+*.hex
+*.mem
+
+# Map / disassembly files
+*.map
+*.lst
+*.dis
+
+
+# =============================================================================
+# PYTHON (test scripts, FFT verification, Cocotb future use)
+# =============================================================================
+
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+
+# =============================================================================
+# SIMULATION BUILD ARTEFACTS (generic)
+# =============================================================================
+
+# Common output directories used in Makefiles
+build/
+out/
+sim_build/
+work/
+
+
+# =============================================================================
+# SENSITIVE / LOCAL CONFIG
+# =============================================================================
+
+# Local tool paths, licence server addresses, API keys
+*.env
+.env.*
+local_config.*
+licence.dat
+license.dat
+
+# Xilinx licence files
+*.lic
+Xilinx.lic

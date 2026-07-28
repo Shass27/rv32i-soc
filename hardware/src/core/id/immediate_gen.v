@@ -1,6 +1,6 @@
 module imm_gen (
     input wire [31:0] instruction,
-    output reg [31:0] imm_out
+    output reg [31:0] imm
 );
     
     wire [6:0] opcode  = instruction[6:0];
@@ -15,21 +15,21 @@ module imm_gen (
         case (opcode)
             ADDI, LOAD:
                 // I-type immediate
-                imm_out  = {{20{instruction[31]}}, instruction[31:20]};
+                imm  = {{20{instruction[31]}}, instruction[31:20]};
 
             STORE:
                 // S-type immediate
-                imm_out = {{20{instruction[31]}}, instruction[31:25], instruction[11:7]};
+                imm = {{20{instruction[31]}}, instruction[31:25], instruction[11:7]};
             
             BRANCH:
                 // SB-type immediate
-                imm_out = {{20{instruction[31]}}, instruction[7], instruction[30:25], instruction[11:8], 1'b0};
+                imm = {{20{instruction[31]}}, instruction[7], instruction[30:25], instruction[11:8], 1'b0};
             
             JAL:
                 // UJ-type immediate
-                imm_out = {{12{instruction[31]}}, instruction[19:12], instruction[20], instruction[30:21], 1'b0};
+                imm = {{12{instruction[31]}}, instruction[19:12], instruction[20], instruction[30:21], 1'b0};
             default:
-                imm_out = 32'b0;
+                imm = 32'b0;
         endcase
     end
 

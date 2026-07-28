@@ -3,11 +3,11 @@
 module tb_immediate_gen;
 
     reg  [31:0] instruction;
-    wire [31:0] imm_out;
+    wire [31:0] imm;
 
     imm_gen dut (
         .instruction (instruction),
-        .imm_out     (imm_out)
+        .imm     (imm)
     );
 
     localparam [31:0] INST_ADDI    = 32'b00000000010100000000000010010011;
@@ -25,10 +25,10 @@ module tb_immediate_gen;
             instruction = instr;
             #10;
 
-            if (imm_out !== expected_imm) begin
-                $error("%s: imm_out got %h, want %h", label, imm_out, expected_imm);
+            if (imm !== expected_imm) begin
+                $error("%s: imm got %h, want %h", label, imm, expected_imm);
             end else begin
-                $display("PASS: %s -> imm_out=%h", label, imm_out);
+                $display("PASS: %s -> imm=%h", label, imm);
             end
         end
     endtask

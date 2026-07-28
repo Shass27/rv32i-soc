@@ -1,9 +1,10 @@
 module branch_logic(
     input wire branch,
     input wire alu_zero,
-    output wire branch_taken
+    output wire target
 );
-
-    assign branch_taken = alu_zero & branch;
+    wire branch_target;
+    assign branch_target = alu_zero & branch;
+    assign target = branch_target;
 
 endmodule

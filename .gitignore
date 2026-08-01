@@ -129,7 +129,6 @@ verilated_*.h
 
 # Flat binary / hex dumps for memory initialisation
 *.bin
-*.hex
 *.mem
 
 # Map / disassembly files

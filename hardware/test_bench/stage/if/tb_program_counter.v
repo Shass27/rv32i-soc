@@ -1,4 +1,5 @@
 `timescale 1ns / 1ps
+<<<<<<< HEAD
 //////////////////////////////////////////////////////////////////////////////////
 // Company: 
 // Engineer: 
@@ -19,11 +20,14 @@
 // 
 //////////////////////////////////////////////////////////////////////////////////
 `timescale 1ns / 1ps
+=======
+>>>>>>> 67c45e14c1987f2fcb1dfa84bfe05d54cf8170b5
 module tb_program_counter;
     reg         clk;
     reg         reset;
     reg  [31:0] target;
     reg         stall;
+<<<<<<< HEAD
     reg         branch_taken;
     reg         jump;
     wire [31:0] pc;
@@ -36,17 +40,37 @@ module tb_program_counter;
         .branch_taken (branch_taken),
         .jump         (jump),
         .pc           (pc)
+=======
+    reg         pc_sel;
+    wire [31:0] pc;
+
+    program_counter uut (
+        .clk    (clk),
+        .reset  (reset),
+        .target (target),
+        .stall  (stall),
+        .pc_sel (pc_sel),
+        .pc     (pc)
+>>>>>>> 67c45e14c1987f2fcb1dfa84bfe05d54cf8170b5
     );
 
     always #5 clk = ~clk;
 
     initial begin
+<<<<<<< HEAD
         clk          = 0;
         reset        = 1;
         target       = 32'h0;
         stall        = 0;
         branch_taken = 0;
         jump         = 0;
+=======
+        clk    = 0;
+        reset  = 1;
+        target = 32'h0;
+        stall  = 0;
+        pc_sel = 0;
+>>>>>>> 67c45e14c1987f2fcb1dfa84bfe05d54cf8170b5
 
         @(posedge clk);
         @(posedge clk);
@@ -57,13 +81,21 @@ module tb_program_counter;
         $display("pc=%h", pc);
 
         @(negedge clk);
+<<<<<<< HEAD
         jump   = 1;
+=======
+        pc_sel = 1;
+>>>>>>> 67c45e14c1987f2fcb1dfa84bfe05d54cf8170b5
         target = 32'h0000_1000;
         @(posedge clk);
         if (pc !== target) $display("FAIL jump: pc=%h", pc);
 
         @(negedge clk);
+<<<<<<< HEAD
         jump = 0;
+=======
+        pc_sel = 0;
+>>>>>>> 67c45e14c1987f2fcb1dfa84bfe05d54cf8170b5
 
         repeat (3) @(posedge clk);
         $display("pc=%h", pc);

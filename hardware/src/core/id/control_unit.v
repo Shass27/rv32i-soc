@@ -1,5 +1,5 @@
 module control_unit (
-    input  [6:0] opcode,    
+    input wire [31:0] instr,   
     
     output reg       RegWrite,
     output reg       ALUSrc,
@@ -10,6 +10,8 @@ module control_unit (
     output reg       jump,
     output reg [1:0] ALUOp // 00 - force ADD, 01 - force SUB, 10 - R & I type, 11 - JAL (Jump)
 );
+
+    wire [6:0] opcode  = instr[6:0];
 
     localparam R_AS = 7'b0110011; // ADD, SUB
     localparam ADDI  = 7'b0010011; // ADDI

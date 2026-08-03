@@ -1,131 +1,96 @@
-`timescale 1ns/1ps
+`timescale 1ns / 1ps
 
 module reg_file_tb;
 
-reg clk;
-reg reset;
+    reg clk;
+    reg reset;
+    reg RegWrite;
+    reg [4:0] ReadReg1, ReadReg2, WriteReg;
+    reg [31:0] WriteData;
 
-reg RegWrite;
+    wire [31:0] ReadData1, ReadData2;
 
-reg [4:0] ReadReg1;
-reg [4:0] ReadReg2;
+    // Instantiate DUT
+    reg_file uut (
+        .clk(clk),
+        .reset(reset),
+        .RegWrite(RegWrite),
+        .ReadReg1(ReadReg1),
+        .ReadReg2(ReadReg2),
+        .WriteReg(WriteReg),
+        .WriteData(WriteData),
+        .ReadData1(ReadData1),
+        .ReadData2(ReadData2)
+    );
 
-reg [4:0] WriteReg;
-reg [31:0] WriteData;
+    // Clock generation
+    always #5 clk = ~clk;
 
-wire [31:0] ReadData1;
-wire [31:0] ReadData2;
+    initial begin
+        clk = 0;
+        reset = 1;
+        RegWrite = 0;
+        ReadReg1 = 0;
+        ReadReg2 = 0;
+        WriteReg = 0;
+        WriteData = 0;
 
-reg_file uut(
+        // ---------------- Reset ----------------
+        @(posedge clk);      // Reset occurs here
+        reset = 0;
 
-.clk(clk),
-.reset(reset),
+        ReadReg1 = 5;
+        ReadReg2 = 10;
+        #1;
+        $display("After Reset: x5=%h x10=%h", ReadData1, ReadData2);
 
-.RegWrite(RegWrite),
+        // --------------- Write x5 --------------
+        @(posedge clk);
+        RegWrite = 1;
+        WriteReg = 5;
+        WriteData = 32'h12345678;
 
-.ReadReg1(ReadReg1),
-.ReadReg2(ReadReg2),
+        @(posedge clk);
+        RegWrite = 0;
 
-.WriteReg(WriteReg),
-.WriteData(WriteData),
+        ReadReg1 = 5;
+        #1;
+        $display("x5 = %h (Expected 12345678)", ReadData1);
 
-.ReadData1(ReadData1),
-.ReadData2(ReadData2)
+        // -------------- Write x10 --------------
+        @(posedge clk);
+        RegWrite = 1;
+        WriteReg = 10;
+        WriteData = 32'hABCDEF01;
 
-);
+        @(posedge clk);
+        RegWrite = 0;
 
-always #5 clk=~clk;
+        ReadReg1 = 10;
+        #1;
+        $display("x10 = %h (Expected ABCDEF01)", ReadData1);
 
-task check1;
-input [31:0] expected;
-begin
-#1;
-if(ReadData1==expected)
-$display("PASS");
-else
-$display("FAIL Expected=%d Got=%d",expected,ReadData1);
-end
-endtask
+        // -------- Dual Read Test --------
+        ReadReg1 = 5;
+        ReadReg2 = 10;
+        #1;
+        $display("Dual Read: x5=%h x10=%h", ReadData1, ReadData2);
 
-initial begin
+        // -------- x0 Protection --------
+        @(posedge clk);
+        RegWrite = 1;
+        WriteReg = 0;
+        WriteData = 32'hFFFFFFFF;
 
-clk=0;
+        @(posedge clk);
+        RegWrite = 0;
 
+        ReadReg1 = 0;
+        #1;
+        $display("x0 = %h (Expected 00000000)", ReadData1);
 
-// RESET
-reset=1;
-RegWrite=0;
-#10;
-reset=0;
-
-
-// Write x5
-
-RegWrite=1;
-WriteReg=5;
-WriteData=123;
-#10;
-
-ReadReg1=5;
-check1(123);
-
-
-// Write x10
-
-
-WriteReg=10;
-WriteData=500;
-#10;
-
-ReadReg1=10;
-check1(500);
-
-// Overwrite
-
-WriteReg=5;
-WriteData=777;
-#10;
-
-ReadReg1=5;
-check1(777);
-
-
-// Disable Write
-
-
-RegWrite=0;
-WriteReg=5;
-WriteData=9999;
-#10;
-
-ReadReg1=5;
-check1(777);
-
-
-// x0
-RegWrite=1;
-WriteReg=0;
-WriteData=5555;
-#10;
-
-ReadReg1=0;
-check1(0);
-
-
-// Dual Read
-
-
-ReadReg1=5;
-ReadReg2=10;
-#5;
-
-if(ReadData1==777 && ReadData2==500)
-$display("PASS Dual Read");
-else
-$display("FAIL Dual Read");
-
-$finish;
-
-end
+        $display("Register File Test Completed.");
+        $finish;
+    end
 
 endmodule

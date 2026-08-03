@@ -1,4 +1,3 @@
-`timescale 1ns / 1ps
 module alu_src_mux(
     input ALUSrc,
     input [31:0] rs2_data,

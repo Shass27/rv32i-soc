@@ -1,10 +1,3 @@
-<<<<<<< HEAD
-
-`timescale 1ns / 1ps
-
-=======
-`timescale 1ns / 1ps
->>>>>>> 67c45e14c1987f2fcb1dfa84bfe05d54cf8170b5
 module reg_file(
 
     input clk,

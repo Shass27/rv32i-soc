@@ -25,6 +25,7 @@ module reg_file(
 
     always @(posedge clk)
     begin
+        registers[0] <= 32'b0; // x0 is always 0
         if(reset)
         begin
             for(i=0;i<=31;i=i+1)

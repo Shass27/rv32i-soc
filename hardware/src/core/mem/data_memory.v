@@ -1,5 +1,5 @@
 module data_memory #(
-    parameter MEM_SIZE = 1024
+    parameter MEM_SIZE = 2048
 )(
     input  wire        clk,
     input  wire        MemWrite,
@@ -11,7 +11,7 @@ module data_memory #(
     reg [31:0] memory [0:MEM_SIZE-1];
 
     initial begin
-        $readmemh("hardware/src/core/if/data.hex", memory);
+        $readmemh("hardware/src/core/mem/data.hex", memory);
     end
 
     // Asynchronous Read

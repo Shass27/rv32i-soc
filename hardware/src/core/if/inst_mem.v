@@ -3,7 +3,7 @@ module inst_mem(
     );
     reg [31:0] mem [0:1023];
     initial begin
-    $readmemh("program.hex",mem);
+    $readmemh("hardware/src/core/if/program.hex",mem);
     end
     assign o_inst = mem[i_addr>>2]; // shift 2 bits to the right as we are using word addressing
 endmodule

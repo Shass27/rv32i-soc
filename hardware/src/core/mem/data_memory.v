@@ -11,7 +11,7 @@ module data_memory #(
     reg [31:0] memory [0:MEM_SIZE-1];
 
     initial begin
-        $readmemh("data.hex", memory);
+        $readmemh("hardware/src/core/if/data.hex", memory);
     end
 
     // Asynchronous Read

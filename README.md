@@ -78,6 +78,8 @@ The waveform below shows the simulation output captured from the `.vcd` dump:
 
 ![Waveform Output](documentation/waveform.png)
 
+Refer to [Processor_Control_Signals](documentation/RV32I_Processor_Control_Signals.md) for explanation of what these signals mean.
+
 ## Setup
 
 ### Prerequisites

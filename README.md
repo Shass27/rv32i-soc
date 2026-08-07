@@ -55,7 +55,7 @@ rv32i-soc/
 ## CPU Datapath
 
 <!-- Add your CPU datapath diagram here -->
-![CPU Datapath]()
+![CPU Datapath](documentation/data_path.png)
 
 ## Supported Instructions
 

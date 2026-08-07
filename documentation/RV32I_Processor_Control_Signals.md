@@ -45,24 +45,4 @@ This document summarizes the major control signals used across the RV32I single-
 | o_inst | 32 | inst_mem | Instruction memory output. |
 | opcode | 7 | control_unit, alu_control | Opcode field (instr[6:0]) used by the Control Unit and ALU Control to determine the instruction type. |
 
-## Control Signal Encodings
-
-### ALUSrc
-| Value | Meaning |
-|---|---|
-| 0 | Second operand = Register (rs2) |
-| 1 | Second operand = Immediate |
-
-### ALUOp
-| Value | Meaning |
-|---|---|
-| 00 | Addition (Load/Store) |
-| 01 | Subtraction (BEQ) |
-| 10 | R-type / I-type |
-| 11 | Jump |
-
-### MemToReg
-| Value | Meaning |
-|---|---|
-| 0 | ALU Result |
-| 1 | Memory Data |
+> Refer the source code for the what the values of the encoding mean. 

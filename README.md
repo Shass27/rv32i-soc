@@ -59,16 +59,15 @@ rv32i-soc/
 
 ## Supported Instructions
 
-The processor currently supports the following subset of the RV32I base integer instruction set:
+The processor supports the following RV32I base integer instructions:
 
-| Type | Instructions | Opcode | Description |
-|------|-------------|--------|-------------|
-| **R-type** | `ADD`, `SUB` | `0110011` | Register-register arithmetic |
-| **I-type** | `ADDI` | `0010011` | Register-immediate arithmetic |
-| **I-type** | `LW` | `0000011` | Load word from data memory |
-| **S-type** | `SW` | `0100011` | Store word to data memory |
-| **B-type** | `BEQ` | `1100011` | Branch if equal |
-| **J-type** | `JAL` | `1101111` | Jump and link |
+| Type | Instructions |
+|------|-------------|
+| **R-type** | `ADD`, `SUB`, `AND`, `OR`, `XOR`, `SLL`, `SRL`, `SRA`, `SLT`, `SLTU` |
+| **I-type** | `ADDI`, `ANDI`, `ORI`, `XORI`, `SLLI`, `SRLI`, `SRAI`, `SLTI`, `SLTIU`, `LW` |
+| **S-type** | `SW` |
+| **B-type** | `BEQ`, `BNE`, `BLT`, `BGE`, `BLTU`, `BGEU` |
+| **J-type** | `JAL` |
 
 ## Waveform Output
 

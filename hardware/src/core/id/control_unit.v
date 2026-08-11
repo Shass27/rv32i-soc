@@ -1,6 +1,6 @@
 module control_unit (
-    input wire [31:0] instr,   
-    
+    input wire [31:0] instr,
+
     output reg       RegWrite,
     output reg       ALUSrc,
     output reg       MemRead,
@@ -13,12 +13,12 @@ module control_unit (
 
     wire [6:0] opcode  = instr[6:0];
 
-    localparam R_AS = 7'b0110011; // ADD, SUB
-    localparam ADDI  = 7'b0010011; // ADDI
-    localparam LOAD   = 7'b0000011; // LW
-    localparam STORE  = 7'b0100011; // SW
-    localparam BRANCH = 7'b1100011; // BEQ
-    localparam JAL    = 7'b1101111; // JAL
+    localparam OP_REG  = 7'b0110011; // R-type : AND OR XOR SLL SRL SRA SLT SLTU (+ ADD SUB)
+    localparam IMM  = 7'b0010011; // I-type : ANDI ORI XORI SLLI SRLI SRAI SLTI SLTIU (+ ADDI)
+    localparam LOAD    = 7'b0000011; // I-type : LB LH LW LBU LHU
+    localparam STORE   = 7'b0100011; // S-type : SB SH SW
+    localparam BRANCH  = 7'b1100011; // B-type : BEQ BNE BLT BGE BLTU BGEU
+    localparam JAL     = 7'b1101111; // J-type : JAL
 
     always @(*) begin
         // defaults
@@ -32,28 +32,28 @@ module control_unit (
         ALUOp = 2'b00;
 
         case (opcode)
-            R_AS : begin
+            OP_REG : begin
                 RegWrite = 1'b1;
-                ALUOp = 2'b10;
+                ALUOp    = 2'b10;
             end
-            ADDI : begin
+            IMM : begin
                 RegWrite = 1'b1;
-                ALUSrc = 1'b1;
-                ALUOp = 2'b10;
+                ALUSrc   = 1'b1;
+                ALUOp    = 2'b10;
             end
             LOAD : begin
                 RegWrite = 1'b1;
-                ALUSrc = 1'b1;
-                MemRead = 1'b1;
+                ALUSrc   = 1'b1;
+                MemRead  = 1'b1;
                 MemToReg = 1'b1;
             end
             STORE : begin
-                ALUSrc = 1'b1;
+                ALUSrc   = 1'b1;
                 MemWrite = 1'b1;
-            end 
+            end
             BRANCH : begin
                 branch = 1'b1;
-                ALUOp = 2'b01;
+                ALUOp  = 2'b01; // force SUB for comparison
             end
             JAL : begin
                 jump = 1'b1;

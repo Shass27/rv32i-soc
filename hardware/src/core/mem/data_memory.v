@@ -8,7 +8,7 @@ module data_memory #(
     //tells WHAT KIND/SIZE of memory operation shd be done 
     input  wire [31:0] mem_addr,
     input  wire [31:0] rs2_data,
-    output wire [31:0] mem_rdata
+    output reg [31:0] mem_rdata
 );
 
     reg [31:0] memory [0:MEM_SIZE-1];

@@ -7,7 +7,8 @@ module control_unit (
     output reg       MemWrite,
     output reg       MemToReg,
     output reg       branch,
-    output reg       jump,
+    output reg       jump1,
+    output reg       jump2,
     output reg [1:0] ALUOp // 00 - force ADD, 01 - force SUB, 10 - R & I type, 11 - JAL (Jump)
 );
 
@@ -19,6 +20,7 @@ module control_unit (
     localparam STORE   = 7'b0100011; // S-type : SB SH SW
     localparam BRANCH  = 7'b1100011; // B-type : BEQ BNE BLT BGE BLTU BGEU
     localparam JAL     = 7'b1101111; // J-type : JAL
+    localparam JALR    = 7'b1100111; // I-type : JALR
 
     always @(*) begin
         // defaults
@@ -28,7 +30,8 @@ module control_unit (
         MemWrite = 1'b0;
         MemToReg = 1'b0;
         branch = 1'b0;
-        jump = 1'b0;
+        jump1 = 1'b0;
+        jump2 = 1'b0;
         ALUOp = 2'b00;
 
         case (opcode)
@@ -56,9 +59,12 @@ module control_unit (
                 ALUOp  = 2'b01; // force SUB for comparison
             end
             JAL : begin
-                jump = 1'b1;
+                jump1 = 1'b1;
                 RegWrite = 1'b1;
-                ALUOp = 2'b11;
+            end
+            JALR : begin
+                RegWrite = 1'b1;
+                jump2 = 1'b1;
             end
             default: ;
         endcase

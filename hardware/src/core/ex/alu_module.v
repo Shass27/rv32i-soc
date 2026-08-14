@@ -1,5 +1,5 @@
-module alu_module(input [31:0] A,input [31:0] B,input [3:0] ALUControl
-,output reg [31:0] ALU_result,
+
+module alu_module(input [31:0] A,input [31:0] B,input [3:0] ALUControl,input [31:0] pc,output reg [31:0] ALU_result,
 output reg ALU_zero );
 
 
@@ -13,11 +13,15 @@ localparam SRL  = 4'b0110;
 localparam SRA  = 4'b0111;
 localparam SLT  = 4'b1000;
 localparam SLTU = 4'b1001;
+ localparam AUIPC_OP = 4'b1010;
 always @(*)
 begin
 case(ALUControl)
        ADD:
+       begin
+      
         ALU_result=A+B;
+        end
     
        SUB:
           ALU_result=A-B;
@@ -45,6 +49,8 @@ case(ALUControl)
 
         SLTU:
             ALU_result = (A < B) ? 32'd1 : 32'd0;
+        AUIPC_OP:
+            ALU_result = pc + B;
  default:
     ALU_result=32'b0;
 endcase

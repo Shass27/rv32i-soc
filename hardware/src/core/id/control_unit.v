@@ -3,6 +3,7 @@ module control_unit (
 
     output reg       RegWrite,
     output reg       ALUSrc,
+    output reg       ALUSrcA,
     output reg       MemRead,
     output reg       MemWrite,
     output reg       MemToReg,
@@ -21,11 +22,14 @@ module control_unit (
     localparam BRANCH  = 7'b1100011; // B-type : BEQ BNE BLT BGE BLTU BGEU
     localparam JAL     = 7'b1101111; // J-type : JAL
     localparam JALR    = 7'b1100111; // I-type : JALR
+    localparam LUI = 7'b0110111; // U-type : LUI
+    localparam AUIPC = 7'b0010111; // U-type : AUIPC
 
     always @(*) begin
         // defaults
         RegWrite = 1'b0;
         ALUSrc = 1'b0;
+        ALUSrcA = 1'b0;
         MemRead = 1'b0;
         MemWrite = 1'b0;
         MemToReg = 1'b0;
@@ -65,6 +69,17 @@ module control_unit (
             JALR : begin
                 RegWrite = 1'b1;
                 jump2 = 1'b1;
+            end
+            LUI : begin
+                RegWrite = 1'b1;
+                ALUSrc = 1'b1;
+                ALUOp    = 2'b00;
+            end
+            AUIPC : begin
+                RegWrite = 1'b1;
+                ALUSrc   = 1'b1;
+                ALUSrcA  = 1'b1;
+                ALUOp    = 2'b00;
             end
             default: ;
         endcase

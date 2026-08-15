@@ -1,3 +1,4 @@
+`timescale 1ns / 1ps
 module alu_control(
 
     input [31:0] instr,

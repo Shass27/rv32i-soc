@@ -51,7 +51,7 @@ module cpu_top (
 
     // --- Muxed signals ---
     wire [31:0] target;        // final target for PC
-    wire [31:0] final_wb_data;    // final data written to register file
+    
 
     //  Target MUX — select between branch and jump targets
     // =========================================================
@@ -62,7 +62,7 @@ module cpu_top (
     //  Writeback MUX — JAL writes pc+4, everything else writes
     //  the normal wb_data path
     // =========================================================
-    assign final_wb_data = jump ? jump_ret_addr : wb_data;
+ 
 
     // =========================================================
     //  IF STAGE
@@ -123,7 +123,7 @@ module cpu_top (
         .ReadReg1  (rs1),
         .ReadReg2  (rs2),
         .WriteReg  (rd),
-        .WriteData (final_wb_data),
+        .WriteData (wb_data),
         .ReadData1 (rs1_data),
         .ReadData2 (rs2_data)
     );
@@ -163,18 +163,23 @@ module cpu_top (
         .jump_ret_addr (jump_ret_addr)
     );
 
-    // =========================================================
-    //  MEM / WB STAGE
-    // =========================================================
-    mem_stage u_mem (
-        .clk       (clk),
-        .MemRead   (MemRead),
-        .MemWrite  (MemWrite),
-        .MemToReg  (MemToReg),
-        .alu_result(ALU_result), //NOTE: variable name changed from ALU_result to alu_result
-        .rs2_data  (rs2_data),
-        .mem_rdata (mem_rdata),
-        .wb_data   (wb_data)
+    data_memory u_mem ( 
+    .clk       (clk),
+    .MemRead   (MemRead),
+    .MemWrite  (MemWrite),
+    .mem_addr  (ALU_result),
+    .rs2_data  (rs2_data),
+    .funct3    (funct3),
+    .mem_rdata (mem_rdata)
+    );
+    
+    writeback_mux u_wb ( 
+    .MemToReg     (MemToReg),
+    .jump         (jump),
+    .alu_result   (ALU_result),
+    .mem_rdata    (mem_rdata),
+    .jump_ret_addr(jump_ret_addr),
+    .wb_data      (wb_data)
     );
 
 endmodule

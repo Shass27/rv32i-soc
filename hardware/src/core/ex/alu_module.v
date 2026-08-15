@@ -17,10 +17,7 @@ always @(*)
 begin
 case(ALUControl)
        ADD:
-       begin
-      
         ALU_result=A+B;
-        end
     
        SUB:
           ALU_result=A-B;

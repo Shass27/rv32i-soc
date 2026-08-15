@@ -20,6 +20,7 @@ localparam LOAD        = 7'b0000011; // I-type Load (LW)
 localparam STORE       = 7'b0100011; // S-type Store (SW)
 localparam BRANCH      = 7'b1100011; // B-type Branch (BEQ)
 localparam JAL         = 7'b1101111; // J-type Jump
+localparam JALR        = 7'b1100111; // I-type Jump Register
 localparam LUI   = 7'b0110111; // U-type
 localparam AUIPC = 7'b0010111; // U-type
  assign opcode = instr[6:0];
@@ -41,7 +42,8 @@ always @(*) begin
       funct7 = instr[31:25];
      end 
 
-I_TYPE: begin
+I_TYPE,
+JALR: begin
     rs1    = instr[19:15];
     rd     = instr[11:7];
     funct3 = instr[14:12];

@@ -1,6 +1,5 @@
 
-module alu_module(input [31:0] A,input [31:0] B,input [3:0] ALUControl,input [31:0] pc,output reg [31:0] ALU_result,
-output reg ALU_zero );
+module alu_module(input [31:0] A,input [31:0] B,input [3:0] ALUControl,input [31:0] pc,output reg [31:0] ALU_result);
 
 
 localparam ADD = 4'b0000;
@@ -54,10 +53,6 @@ case(ALUControl)
  default:
     ALU_result=32'b0;
 endcase
-if(ALUControl==SUB)    
-    ALU_zero=(ALU_result==32'b0);//Zero Flag->mostly for BEQ INS
-else
-   ALU_zero=1'b0;
     
 end
 endmodule

@@ -3,7 +3,7 @@ module alu_control(
 
     input [31:0] instr,
     input [1:0] ALUOp,
-
+    
     output reg [4:0] rs1,
     output reg [4:0] rs2,
     output reg [4:0] rd,
@@ -20,6 +20,8 @@ localparam LOAD        = 7'b0000011; // I-type Load (LW)
 localparam STORE       = 7'b0100011; // S-type Store (SW)
 localparam BRANCH      = 7'b1100011; // B-type Branch (BEQ)
 localparam JAL         = 7'b1101111; // J-type Jump
+localparam LUI   = 7'b0110111; // U-type
+localparam AUIPC = 7'b0010111; // U-type
  assign opcode = instr[6:0];
 
 always @(*) begin
@@ -61,6 +63,10 @@ STORE,
 JAL: begin
      rd = instr[11:7];
         end
+LUI,
+ AUIPC: begin
+        rd = instr[11:7];
+    end 
     endcase
 end
 
@@ -87,13 +93,18 @@ localparam SRL = 4'b0110;
 localparam SRA = 4'b0111;
 localparam SLT = 4'b1000;
 localparam SLTU =4'b1001;
-
+localparam AUIPC_OP = 4'b1010;
 always @(*) 
 begin
     case(ALUOp)
 
-        ALU_ADD:
-            ALUControl = ADD; //used for LW,SW
+       
+        ALU_ADD: begin
+            if (opcode == 7'b0010111)   // AUIPC
+                ALUControl = AUIPC_OP;
+            else
+                ALUControl = ADD;
+        end
 
         ALU_SUB:
             ALUControl = SUB;//used for BEQ

@@ -118,47 +118,49 @@ Refer to [Processor_Control_Signals](documentation/RV32I_Processor_Control_Signa
 
 ## Compile & Run
 
-All commands are run from the repository root.
+All commands are run from the repository root using `make`.
 
-### 1. Compile
+### 1. Compile & Execute
 
-From the repository root, compile the top-level testbench with the current RTL sources:
-
-```bash
-iverilog -o build/sim_cpu_top \
-  hardware/test_bench/tb_cpu_top.v \
-  hardware/src/core/cpu_top.v \
-  hardware/src/core/if/program_counter.v \
-  hardware/src/core/if/inst_mem.v \
-  hardware/src/core/id/control_unit.v \
-  hardware/src/core/id/immediate_gen.v \
-  hardware/src/core/id/branch.v \
-  hardware/src/core/id/jump.v \
-  hardware/src/core/ex/alu_control.v \
-  hardware/src/core/ex/alu_module.v \
-  hardware/src/core/ex/alu_src_mux.v \
-  hardware/src/core/ex/reg_file.v \
-  hardware/src/core/mem/data_memory.v \
-  hardware/src/core/wb/writeback_mux.v
-```
-
-> Note: the current self-checking testbench references `u_dut.final_wb_data`, but the present `cpu_top` module does not define that signal. Icarus Verilog currently fails during elaboration for that reason, so the repo is in a partially working state until the testbench or DUT is aligned.
-
-### 2. Execute
+To compile the RTL sources and run the simulation in one step:
 
 ```bash
-vvp build/sim_cpu_top
+make run
+```
+Or simply:
+```bash
+make
 ```
 
-When the DUT/testbench mismatch is resolved, a successful run should print:
+When successful, a run will output:
 
 ```text
-PASS: all checks passed
+Compilation successful!
+Running simulation...
+...
 ```
 
 This generates `cpu_top.vcd` in the working directory when the simulation completes successfully.
 
-### 3. View Waveform
+### 2. Compile Only
+
+To just compile the design without running the simulation:
+
+```bash
+make compile
+```
+
+### 3. Clean Workspace
+
+To remove build artifacts and waveform files:
+
+```bash
+make clean
+```
+
+### 4. View Waveform
+
+Once a successful simulation has run and generated `cpu_top.vcd`, you can view it:
 
 ```bash
 # GTKWave

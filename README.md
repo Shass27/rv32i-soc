@@ -16,40 +16,45 @@ A single-cycle RISC-V RV32I CPU implemented in Verilog. The processor executes o
 
 ```
 rv32i-soc/
+├── README.md
+├── LICENSE
+├── build/                             # Generated simulation outputs
+├── documentation/
+│   ├── RV32I_Processor_Control_Signals.md
+│   ├── data_path.png
+│   └── waveform.png
 ├── hardware/
 │   ├── src/
-│   │   ├── core/
-│   │   │   ├── cpu_top.v              # Top-level CPU module
-│   │   │   ├── if/                    # Instruction Fetch stage
-│   │   │   │   ├── program_counter.v  # PC with branch/jump/stall support
-│   │   │   │   ├── inst_mem.v         # Instruction memory (reads program.hex)
-│   │   │   │   └── program.hex        # Test program in hex
-│   │   │   ├── id/                    # Instruction Decode stage
-│   │   │   │   ├── control_unit.v     # Main control decoder
-│   │   │   │   ├── immediate_gen.v    # Immediate generator (I/S/B/J-type)
-│   │   │   │   ├── branch.v           # Branch target & taken logic
-│   │   │   │   └── jump.v             # Jump target & return address logic
-│   │   │   ├── ex/                    # Execute stage
-│   │   │   │   ├── alu_control.v      # ALU operation decoder & field extractor
-│   │   │   │   ├── alu_module.v       # ALU (ADD, SUB)
-│   │   │   │   ├── alu_src_mux.v      # MUX: rs2_data vs immediate
-│   │   │   │   └── reg_file.v         # 32 × 32-bit register file
-│   │   │   └── mem/                   # Memory / Writeback stage
-│   │   │       ├── data_memory.v      # Data memory (reads data.hex)
-│   │   │       ├── mem_stage.v        # Memory stage wrapper
-│   │   │       ├── writeback_mux.v    # MUX: ALU result vs memory data
-│   │   │       └── data.hex           # Initial data memory contents
-│   │   └── include/                   # Shared headers / defines
+│   │   └── core/
+│   │       ├── cpu_top.v              # Top-level single-cycle CPU
+│   │       ├── if/
+│   │       │   ├── inst_mem.v         # Instruction memory, reads program.hex
+│   │       │   ├── program_counter.v  # PC update logic with branch/jump support
+│   │       │   └── program.hex       # Program image for the CPU testbench
+│   │       ├── id/
+│   │       │   ├── branch.v           # Branch condition and target generation
+│   │       │   ├── control_unit.v     # Opcode decode and control signals
+│   │       │   ├── immediate_gen.v    # Sign-/zero-extended immediate generation
+│   │       │   └── jump.v             # JAL / JALR target logic
+│   │       ├── ex/
+│   │       │   ├── alu_control.v      # Decodes ALU op, funct3/funct7 and register fields
+│   │       │   ├── alu_module.v       # Arithmetic / logical ALU implementation
+│   │       │   ├── alu_src_mux.v      # Selects rs2_data or immediate for ALU input B
+│   │       │   └── reg_file.v         # 32 x 32 register file
+│   │       ├── mem/
+│   │       │   ├── data.hex           # Initial data memory contents
+│   │       │   └── data_memory.v      # Memory read/write implementation
+│   │       └── wb/
+│   │           └── writeback_mux.v    # Selects ALU result, memory data, or return address
 │   └── test_bench/
-│       ├── tb_cpu_top.v               # Top-level self-checking testbench
-│       └── stage/                     # Per-stage unit testbenches
-│           ├── if/                    # IF stage testbenches
-│           ├── id/                    # ID stage testbenches
-│           ├── ex/                    # EX stage testbenches
-│           └── mem/                   # MEM stage testbenches
-├── build/                             # Simulation outputs (.vcd, executables)
-├── documentation/                     # Diagrams, waveforms, docs
-└── LICENSE
+│       ├── tb_cpu_top.v               # Top-level self-checking RTL testbench
+│       └── stage/
+│           ├── ex/
+│           ├── id/
+│           ├── if/
+│           ├── mem/
+│           └── wb/
+└──
 ```
 
 ## CPU Datapath
@@ -59,15 +64,19 @@ rv32i-soc/
 
 ## Supported Instructions
 
-The processor supports the following RV32I base integer instructions:
+The current RTL implements a RV32I-style integer core with the following instruction groups:
 
 | Type | Instructions |
 |------|-------------|
 | **R-type** | `ADD`, `SUB`, `AND`, `OR`, `XOR`, `SLL`, `SRL`, `SRA`, `SLT`, `SLTU` |
-| **I-type** | `ADDI`, `ANDI`, `ORI`, `XORI`, `SLLI`, `SRLI`, `SRAI`, `SLTI`, `SLTIU`, `LW` |
-| **S-type** | `SW` |
-| **B-type** | `BEQ`, `BNE`, `BLT`, `BGE`, `BLTU`, `BGEU` |
-| **J-type** | `JAL` |
+| **I-type ALU** | `ADDI`, `ANDI`, `ORI`, `XORI`, `SLLI`, `SRLI`, `SRAI`, `SLTI`, `SLTIU` |
+| **Load** | `LB`, `LH`, `LW`, `LBU`, `LHU` |
+| **Store** | `SB`, `SH`, `SW` |
+| **Branch** | `BEQ`, `BNE`, `BLT`, `BGE`, `BLTU`, `BGEU` |
+| **Jump / link** | `JAL`, `JALR` |
+| **U-type** | `LUI`, `AUIPC` |
+
+This matches the control decode and ALU handling implemented in `control_unit.v`, `alu_control.v`, and `jump.v`.
 
 ## Waveform Output
 
@@ -113,6 +122,8 @@ All commands are run from the repository root.
 
 ### 1. Compile
 
+From the repository root, compile the top-level testbench with the current RTL sources:
+
 ```bash
 iverilog -o build/sim_cpu_top \
   hardware/test_bench/tb_cpu_top.v \
@@ -128,9 +139,10 @@ iverilog -o build/sim_cpu_top \
   hardware/src/core/ex/alu_src_mux.v \
   hardware/src/core/ex/reg_file.v \
   hardware/src/core/mem/data_memory.v \
-  hardware/src/core/mem/mem_stage.v \
-  hardware/src/core/mem/writeback_mux.v
+  hardware/src/core/wb/writeback_mux.v
 ```
+
+> Note: the current self-checking testbench references `u_dut.final_wb_data`, but the present `cpu_top` module does not define that signal. Icarus Verilog currently fails during elaboration for that reason, so the repo is in a partially working state until the testbench or DUT is aligned.
 
 ### 2. Execute
 
@@ -138,13 +150,13 @@ iverilog -o build/sim_cpu_top \
 vvp build/sim_cpu_top
 ```
 
-A successful run prints:
+When the DUT/testbench mismatch is resolved, a successful run should print:
 
-```
+```text
 PASS: all checks passed
 ```
 
-This also generates `cpu_top.vcd` in the working directory.
+This generates `cpu_top.vcd` in the working directory when the simulation completes successfully.
 
 ### 3. View Waveform
 

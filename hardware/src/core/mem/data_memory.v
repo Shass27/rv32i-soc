@@ -1,5 +1,7 @@
 module data_memory #(
-    parameter MEM_SIZE = 2048
+    parameter MEM_SIZE = 2048,
+    // Address used by riscv-tests proxy to report pass/fail (default from riscv-tests)
+    parameter TOHOST_ADDR = 32'h80001000
 )(
     input  wire clk,
     input  wire MemWrite,
@@ -20,115 +22,107 @@ module data_memory #(
     assign word_index  = mem_addr >> 2;
     assign byte_offset = mem_addr[1:0];
 
+    // For 32-bit tohost handling
+    reg [31:0] tohost;
 
     initial begin
         $readmemh("hardware/src/core/mem/data.hex", memory);
+        tohost = 32'b0;
     end
 
     // Asynchronous Read
     always @(*) begin
-        mem_rdata =32'b0;
-        if(MemRead) begin
-            case(funct3)
+        mem_rdata = 32'b0;
+        if (MemRead) begin
+            case (funct3)
                 // LB - Load Byte, sign extended
-            3'b000: begin
-                case (byte_offset)
-                    2'b00: mem_rdata = {{24{memory[word_index][7]}},
-                                         memory[word_index][7:0]};
+                3'b000: begin
+                    case (byte_offset)
+                        2'b00: mem_rdata = {{24{memory[word_index][7]}},  memory[word_index][7:0]};
+                        2'b01: mem_rdata = {{24{memory[word_index][15]}}, memory[word_index][15:8]};
+                        2'b10: mem_rdata = {{24{memory[word_index][23]}}, memory[word_index][23:16]};
+                        2'b11: mem_rdata = {{24{memory[word_index][31]}}, memory[word_index][31:24]};
+                    endcase
+                end
 
-                    2'b01: mem_rdata = {{24{memory[word_index][15]}},
-                                         memory[word_index][15:8]};
+                // LH - Load Halfword, sign extended
+                3'b001: begin
+                    case (byte_offset)
+                        2'b00: mem_rdata = {{16{memory[word_index][15]}}, memory[word_index][15:0]};
+                        2'b10: mem_rdata = {{16{memory[word_index][31]}}, memory[word_index][31:16]};
+                    endcase
+                end
 
-                    2'b10: mem_rdata = {{24{memory[word_index][23]}},
-                                         memory[word_index][23:16]};
+                // LW - Load Word
+                3'b010: mem_rdata = memory[word_index];
 
-                    2'b11: mem_rdata = {{24{memory[word_index][31]}},
-                                         memory[word_index][31:24]};
-                endcase
-            end
+                // LBU - Load Byte, zero extended
+                3'b100: begin
+                    case (byte_offset)
+                        2'b00: mem_rdata = {24'b0, memory[word_index][7:0]};
+                        2'b01: mem_rdata = {24'b0, memory[word_index][15:8]};
+                        2'b10: mem_rdata = {24'b0, memory[word_index][23:16]};
+                        2'b11: mem_rdata = {24'b0, memory[word_index][31:24]};
+                    endcase
+                end
 
-            // LH - Load Halfword, sign extended
-            3'b001: begin
-                case (byte_offset)
-                    2'b00: mem_rdata = {{16{memory[word_index][15]}},
-                                         memory[word_index][15:0]};
+                // LHU - Load Halfword, zero extended
+                3'b101: begin
+                    case (byte_offset)
+                        2'b00: mem_rdata = {16'b0, memory[word_index][15:0]};
+                        2'b10: mem_rdata = {16'b0, memory[word_index][31:16]};
+                    endcase
+                end
 
-                    2'b10: mem_rdata = {{16{memory[word_index][31]}},
-                                         memory[word_index][31:16]};
-                endcase
-            end
-
-            // LW - Load Word
-            3'b010: begin
-                mem_rdata = memory[word_index];
-            end
-
-            // LBU - Load Byte, zero extended
-            3'b100: begin
-                case (byte_offset)
-                    2'b00: mem_rdata = {24'b0, memory[word_index][7:0]};
-
-                    2'b01: mem_rdata = {24'b0, memory[word_index][15:8]};
-
-                    2'b10: mem_rdata = {24'b0, memory[word_index][23:16]};
-
-                    2'b11: mem_rdata = {24'b0, memory[word_index][31:24]};
-                endcase
-            end
-
-            // LHU - Load Halfword, zero extended
-            3'b101: begin
-                case (byte_offset)
-                    2'b00: mem_rdata = {16'b0, memory[word_index][15:0]};
-
-                    2'b10: mem_rdata = {16'b0, memory[word_index][31:16]};
-                endcase
-            end
-
-            default:
-                mem_rdata = 32'b0;
-
-        endcase
-
+                default: mem_rdata = 32'b0;
+            endcase
         end
     end
-    
 
     // Synchronous Write
     always @(posedge clk) begin
-            if (MemWrite) begin
+        if (MemWrite) begin
 
-        case (funct3)
+            // Intercept writes to the `tohost` address used by riscv-tests proxy.
+            if (mem_addr == TOHOST_ADDR) begin
+                tohost <= rs2_data;
+                // Convention: writing 1 means PASS. Non-zero values indicate FAIL.
+                if (rs2_data == 32'h1) begin
+                    $display("TOHOST: PASS (tohost=0x%h)", rs2_data);
+                    $finish;
+                end else if (rs2_data != 32'h0) begin
+                    $display("TOHOST: FAIL (tohost=0x%h)", rs2_data);
+                    $finish;
+                end
+            end else begin
+                case (funct3)
+                    // SB - Store Byte
+                    3'b000: begin
+                        case (byte_offset)
+                            2'b00: memory[word_index][7:0]   <= rs2_data[7:0];
+                            2'b01: memory[word_index][15:8]  <= rs2_data[7:0];
+                            2'b10: memory[word_index][23:16] <= rs2_data[7:0];
+                            2'b11: memory[word_index][31:24] <= rs2_data[7:0];
+                        endcase
+                    end
 
-            // SB - Store Byte
-            3'b000: begin
-                case (byte_offset)
-                    2'b00: memory[word_index][7:0]   <= rs2_data[7:0];
-                    2'b01: memory[word_index][15:8]  <= rs2_data[7:0];
-                    2'b10: memory[word_index][23:16] <= rs2_data[7:0];
-                    2'b11: memory[word_index][31:24] <= rs2_data[7:0];
+                    // SH - Store Halfword
+                    3'b001: begin
+                        case (byte_offset)
+                            2'b00: memory[word_index][15:0]  <= rs2_data[15:0];
+                            2'b10: memory[word_index][31:16] <= rs2_data[15:0];
+                        endcase
+                    end
+
+                    // SW - Store Word
+                    3'b010: memory[word_index] <= rs2_data;
+
+                    default: begin
+                        // No valid store operation
+                    end
                 endcase
             end
-
-            // SH - Store Halfword
-            3'b001: begin
-                case (byte_offset)
-                    2'b00: memory[word_index][15:0]  <= rs2_data[15:0];
-                    2'b10: memory[word_index][31:16] <= rs2_data[15:0];
-                endcase
-            end
-
-            // SW - Store Word
-            3'b010: begin
-                memory[word_index] <= rs2_data;
-            end
-
-            default: begin
-                // No valid store operation
-            end
-
-        endcase
+        end
     end
-end
 
 endmodule

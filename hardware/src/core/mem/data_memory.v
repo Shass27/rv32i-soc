@@ -1,7 +1,7 @@
 module data_memory #(
     parameter MEM_SIZE = 4097,
     // Address used by riscv-tests proxy to report pass/fail (default from riscv-tests)
-    parameter TOHOST_ADDR = 32'h80001000
+    parameter TOHOST_ADDR = 32'h000001c0
 )(
     input  wire clk,
     input  wire MemWrite,

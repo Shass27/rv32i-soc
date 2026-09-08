@@ -32,7 +32,7 @@ module tb_cpu_top;
         reset = 0;
 
         // Let the CPU run the add.hex instructions
-        #1000;
+        #15000;
         
         $display("Simulation complete. Open build/cpu_waveforms.vcd in GTKWave.");
         $finish; // End the simulation safely to flush the VCD file

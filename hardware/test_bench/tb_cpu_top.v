@@ -19,7 +19,7 @@ module testbench;
     // 4. Dedicated VCD Dump Block (Best Practice)
     initial begin
         $dumpfile("build/cpu_waveforms.vcd"); 
-        $dumpvars(0, testbench);
+        $dumpvars(0, tb_cpu_top);
     end
 
     // 5. Main simulation logic

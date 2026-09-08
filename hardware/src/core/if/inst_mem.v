@@ -1,7 +1,7 @@
 module inst_mem(
       input [31:0] i_addr, output [31:0] o_inst
     );
-    reg [31:0] mem [0:2047];
+    reg [31:0] mem [0:4096];
     initial begin
     $readmemh("hardware/src/core/if/program.hex",mem);
     end

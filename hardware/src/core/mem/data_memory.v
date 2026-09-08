@@ -1,5 +1,5 @@
 module data_memory #(
-    parameter MEM_SIZE = 2048,
+    parameter MEM_SIZE = 4097,
     // Address used by riscv-tests proxy to report pass/fail (default from riscv-tests)
     parameter TOHOST_ADDR = 32'h80001000
 )(

@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-module testbench;
+module tb_cpu_top;
 
     // 1. Declare signals and INITIALIZE clock immediately
     // This prevents the "x" (unknown) state race condition

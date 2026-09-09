@@ -10,6 +10,7 @@ module program_counter (
 );
     wire pc_sel;
     assign pc_sel = branch_taken | jump1 | jump2;
+
     always @(posedge clk or posedge reset) begin
         if (reset)
             pc <= 32'b0;

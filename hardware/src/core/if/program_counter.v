@@ -1,6 +1,7 @@
 module program_counter (
     input wire        clk,
     input wire        reset,
+    input wire        stall,
     input wire        branch_taken,
     input wire        jump1,
     input wire        jump2,       
@@ -12,6 +13,8 @@ module program_counter (
     always @(posedge clk or posedge reset) begin
         if (reset)
             pc <= 32'b0;
+        else if (stall)
+            pc <= pc;
         else if (pc_sel)
             pc <= target;
         else

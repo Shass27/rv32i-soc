@@ -11,6 +11,13 @@ module cpu_top (
     wire [31:0] pc;
     wire [31:0] instr;
 
+    // --- Stall (placeholder: tied low until a hazard unit is added) ---
+    wire        stall;
+    assign stall = 1'b0;
+
+    // --- Gated RegWrite: suppressed while stall is asserted ---
+    wire        RegWrite_gated;
+
     // --- ID stage (control_unit.v) ---
     wire        RegWrite;
     wire        ALUSrc;
@@ -26,6 +33,7 @@ module cpu_top (
     // --- Derived jump signal (JAL or JALR) ---
     wire        jump;
     assign jump = jump1 | jump2;
+    assign RegWrite_gated = RegWrite & ~stall;
 
     // --- ID stage (immediate_gen.v) ---
     wire [31:0] imm;
@@ -75,6 +83,7 @@ module cpu_top (
     program_counter u_pc (
         .clk          (clk),
         .reset        (reset),
+        .stall        (stall),
         .branch_taken (branch_taken),
         .jump1        (jump1),
         .jump2        (jump2),
@@ -126,7 +135,7 @@ module cpu_top (
     reg_file u_regfile (
         .clk       (clk),
         .reset     (reset),
-        .RegWrite  (RegWrite),
+        .RegWrite  (RegWrite_gated),
         .ReadReg1  (rs1),
         .ReadReg2  (rs2),
         .WriteReg  (rd),

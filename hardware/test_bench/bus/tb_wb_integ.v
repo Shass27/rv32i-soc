@@ -2,6 +2,7 @@
 // all Wishbone signals are real wires; no manual ack/dat driving
 
 `timescale 1ns/1ps
+`include "wb_defs.vh"
 
 module tb_wb_integ;
 
@@ -125,21 +126,21 @@ module tb_wb_integ;
         check(wb_ack, 0, "T1_ack=0_idle");
 
         // T2: read preloaded word 0 (byte addr 0x00 → mem[0] = DEADBEEF)
-        wb_txn(0, 32'h00, 0);
+        wb_txn(0, `WB_RAM_BASE, 0);
         check(o_rdat, 32'hDEAD_BEEF, "T2_preload_word0");
 
         // T3: read preloaded word 1 (byte addr 0x04 → mem[1] = CAFEBABE)
-        wb_txn(0, 32'h04, 0);
+        wb_txn(0, `WB_RAM_BASE + 32'h4, 0);
         check(o_rdat, 32'hCAFE_BABE, "T3_preload_word1");
 
         // T4: write to word 5 (byte addr 0x14) then read back
-        wb_txn(1, 32'h14, 32'hBEEF_CAFE);
-        wb_txn(0, 32'h14, 0);
+        wb_txn(1, `WB_RAM_BASE + 32'h14, 32'hBEEF_CAFE);
+        wb_txn(0, `WB_RAM_BASE + 32'h14, 0);
         check(o_rdat, 32'hBEEF_CAFE, "T4_write_readback");
 
         // T5: Wishbone handshake — cyc+stb asserted when busy, ack completes it
         @(negedge clk);
-        i_req = 1; i_we = 0; i_addr = 32'h08; i_wdat = 0;
+        i_req = 1; i_we = 0; i_addr = `WB_RAM_BASE + 32'h8; i_wdat = 0;
         @(posedge clk); #1; i_req = 0;
         check(wb_cyc, 1, "T5_cyc=1_during_txn");
         check(wb_stb, 1, "T5_stb=1_during_txn");
@@ -153,7 +154,7 @@ module tb_wb_integ;
 
         // T6: o_done pulses exactly one cycle
         @(negedge clk);
-        i_req = 1; i_we = 0; i_addr = 32'h00; i_wdat = 0;
+        i_req = 1; i_we = 0; i_addr = `WB_RAM_BASE; i_wdat = 0;
         @(posedge clk); #1; i_req = 0;
         @(posedge o_done);          // catch the rising edge
         check(o_done, 1, "T6_done=1_on_ack");
@@ -161,21 +162,21 @@ module tb_wb_integ;
         check(o_done, 0, "T6_done=0_next_cycle");
 
         // T7: overwrite then verify
-        wb_txn(1, 32'h00, 32'hFFFF_FFFF);
-        wb_txn(0, 32'h00, 0);
+        wb_txn(1, `WB_RAM_BASE, 32'hFFFF_FFFF);
+        wb_txn(0, `WB_RAM_BASE, 0);
         check(o_rdat, 32'hFFFF_FFFF, "T7_overwrite_word0");
 
         // T8: back-to-back — write addr 0x20, read it back immediately
-        wb_txn(1, 32'h20, 32'hA5A5_5A5A);
-        wb_txn(0, 32'h20, 0);
+        wb_txn(1, `WB_RAM_BASE + 32'h20, 32'hA5A5_5A5A);
+        wb_txn(0, `WB_RAM_BASE + 32'h20, 0);
         check(o_rdat, 32'hA5A5_5A5A, "T8_back_to_back");
 
         // T9: address independence — word 0 holds T7 value after T8
-        wb_txn(0, 32'h00, 0);
+        wb_txn(0, `WB_RAM_BASE, 0);
         check(o_rdat, 32'hFFFF_FFFF, "T9_addr_independence");
 
         // T10: unwritten location returns 0 (word 20 = byte 0x50)
-        wb_txn(0, 32'h50, 0);
+        wb_txn(0, `WB_RAM_BASE + 32'h50, 0);
         check(o_rdat, 32'h0000_0000, "T10_uninit_reads_zero");
 
         $display("\n=============================");

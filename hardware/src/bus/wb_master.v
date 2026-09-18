@@ -1,6 +1,6 @@
 // wb_master.v — Minimal Wishbone Classic master
 // Single-transaction FSM: IDLE → ACTIVE → DONE → IDLE
-// Drives CYC/STB/WE/ADR/DAT; waits for combinational ACK from slave
+// Drives CYC/STB/WE/ADR/DAT; waits for combinational ACK or ERR from slave
 
 module wb_master #(
     parameter ADDR_WIDTH = 32,
@@ -16,7 +16,8 @@ module wb_master #(
     input  wire [DATA_WIDTH-1:0]  i_wdat,    // write data
     output reg  [DATA_WIDTH-1:0]  o_rdat,    // captured read data
     output wire                   o_busy,    // high while transaction in flight
-    output reg                    o_done,    // 1-cycle pulse on ACK
+    output reg                    o_done,    // 1-cycle pulse on ACK or ERR
+    output reg                    o_err,     // qualifies o_done: 1 = terminated by ERR
 
     // Wishbone master → slave
     output reg                    o_wb_cyc,
@@ -25,7 +26,8 @@ module wb_master #(
     output reg  [ADDR_WIDTH-1:0]  o_wb_adr,
     output reg  [DATA_WIDTH-1:0]  o_wb_dat,
     input  wire [DATA_WIDTH-1:0]  i_wb_dat,
-    input  wire                   i_wb_ack
+    input  wire                   i_wb_ack,
+    input  wire                   i_wb_err
 );
 
     // FSM states
@@ -37,8 +39,12 @@ module wb_master #(
 
     assign o_busy = (state != IDLE);
 
+    // a cycle terminates on either terminator
+    wire term = i_wb_ack | i_wb_err;
+
     always @(posedge i_clk) begin
         o_done <= 0; // default: deassert every cycle
+        o_err  <= 0;
 
         if (i_rst) begin
             state     <= IDLE;
@@ -63,11 +69,12 @@ module wb_master #(
                 end
 
                 ACTIVE: begin
-                    if (i_wb_ack) begin       // slave acknowledged
+                    if (term) begin           // slave acknowledged or errored
                         o_rdat   <= i_wb_dat; // capture read data (valid on reads)
                         o_wb_cyc <= 0;
                         o_wb_stb <= 0;
                         o_done   <= 1;        // pulse done for one cycle
+                        o_err    <= i_wb_err; // flag bad address / bus error
                         state    <= IDLE;     // return directly to IDLE
                     end
                 end

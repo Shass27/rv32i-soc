@@ -12,7 +12,9 @@ BUILD_DIR = build
 
 # Files
 # Find all Verilog files in the core directory
-SRC_FILES = $(wildcard $(SRC_DIR)/**/*.v $(SRC_DIR)/*.v)
+BUS_DIR = hardware/src/bus
+# wb_ram is unused (local data_memory is the CPU RAM), so it is left out
+SRC_FILES = $(wildcard $(SRC_DIR)/**/*.v $(SRC_DIR)/*.v) $(filter-out $(BUS_DIR)/wb_ram.v,$(wildcard $(BUS_DIR)/*.v))
 # Main testbench
 TB_FILE = $(TB_DIR)/tb_cpu_top.v
 
@@ -29,7 +31,7 @@ $(BUILD_DIR):
 # Compile Verilog sources
 compile: $(BUILD_DIR) $(SRC_FILES) $(TB_FILE)
 	@echo "Compiling hardware sources..."
-	$(IVERILOG) -I $(INC_DIR) -o $(OUT) $(SRC_FILES) $(TB_FILE)
+	$(IVERILOG) -I $(INC_DIR) -I $(BUS_DIR) -o $(OUT) $(SRC_FILES) $(TB_FILE)
 	@echo "Compilation successful!"
 
 # Run simulation

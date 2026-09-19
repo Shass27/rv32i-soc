@@ -18,6 +18,19 @@ module tb_cpu_top;
     );
 
     // ---------------------------------------------------------
+    // MAC driver: assembled into the DUT memories at t=1ns, i.e. after
+    // inst_mem/data_memory have run their own $readmemh at t=0.
+    // ---------------------------------------------------------
+    `include "rv32i_asm.vh"
+    `include "mac_driver.vh"
+
+    initial begin
+        #1;
+        load_mac_driver;
+        load_mac_data;
+    end
+
+    // ---------------------------------------------------------
     // Test program in program.hex  (56 instructions)
     //
     // ===== R-type ALU instructions =====
@@ -92,6 +105,10 @@ module tb_cpu_top;
     // ===== LUI + AUIPC =====
     // 0xD8: 123453b7    lui   x7,  0x12345            // x7 = 0x12345000
     // 0xDC: 00001417    auipc x8,  0x1                // x8 = 0xDC + 0x1000 = 0x10DC
+    //
+    // ===== MAC accelerator driver (injected at 0xE0, see mac_driver.vh) =====
+    // Runs after the base program; results are checked after the run, not per cycle,
+    // because bus accesses stall the core and break the cycle-to-instruction mapping.
     //
     // ===== Final register state =====
     //   x1=10, x2=3, x3=13, x4=66, x5=0xC0, x6=0xD0
@@ -524,8 +541,16 @@ module tb_cpu_top;
         cycle  = 0;
         errors = 0;
 
-        // 3 reset cycles + 50 instruction cycles + margin
-        repeat (70) @(posedge clk);
+        // 3 reset cycles + 50 instruction cycles + MAC driver (bus stalls, poll) + margin
+        repeat (250) @(posedge clk);
+
+        // MAC driver results (parked at 0x14C)
+        check_eq32("mac-pc",     u_dut.pc,                       32'h0000014C);
+        check_eq32("mac-acc",    u_dut.u_mac.acc[31:0],          32'd70);
+        check_eq32("mac-x17",    u_dut.u_regfile.registers[17],  32'd70);
+        check_eq32("mac-x18",    u_dut.u_regfile.registers[18],  32'd0);
+        check_eq1 ("mac-idle",   u_dut.u_mac.busy,               1'b0);
+        check_eq1 ("mac-noerr",  u_dut.wb_err_flag,              1'b0);
 
         if (errors == 0) begin
             $display("PASS: all checks passed");

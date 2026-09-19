@@ -31,7 +31,7 @@ $(BUILD_DIR):
 # Compile Verilog sources
 compile: $(BUILD_DIR) $(SRC_FILES) $(TB_FILE)
 	@echo "Compiling hardware sources..."
-	$(IVERILOG) -I $(INC_DIR) -I $(BUS_DIR) -o $(OUT) $(SRC_FILES) $(TB_FILE)
+	$(IVERILOG) -I $(INC_DIR) -I $(BUS_DIR) -I $(TB_DIR) -o $(OUT) $(SRC_FILES) $(TB_FILE)
 	@echo "Compilation successful!"
 
 # Run simulation

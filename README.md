@@ -1,15 +1,18 @@
 # RV32I SoC
 
-A single-cycle RISC-V RV32I CPU implemented in Verilog. The processor executes one instruction per clock cycle with a classic five-stage datapath — **Fetch → Decode → Execute → Memory → Writeback** — wired combinationally in a single cycle. The design is fully simulatable with [Icarus Verilog](https://steveicarus.github.io/iverilog/) and includes a self-checking testbench that verifies arithmetic, memory, branch, and jump operations.
+A single-cycle RISC-V RV32I core in Verilog, extended into a small SoC: a Wishbone B4 Classic bus, a MAC accelerator, and an error slave. The core executes one instruction per clock cycle (**Fetch → Decode → Execute → Memory → Writeback**, wired combinationally) and stalls only on bus (IO) accesses. Simulated with [Icarus Verilog](https://steveicarus.github.io/iverilog/); a self-checking SoC testbench verifies the demo program and a MAC dot-product, and the core passes all 37 official `rv32ui` tests.
 
 ## Table of Contents
 
 - [Repository Structure](#repository-structure)
 - [CPU Datapath](#cpu-datapath)
 - [Supported Instructions](#supported-instructions)
+- [Wishbone Bus](#wishbone-bus)
+- [MAC Accelerator](#mac-accelerator)
 - [Waveform Output](#waveform-output)
 - [Setup](#setup)
 - [Compile & Run](#compile--run)
+- [Verification](#verification)
 - [License](#license)
 
 ## Repository Structure
@@ -18,49 +21,64 @@ A single-cycle RISC-V RV32I CPU implemented in Verilog. The processor executes o
 rv32i-soc/
 ├── README.md
 ├── LICENSE
-├── build/                             # Generated simulation outputs
+├── Makefile                           # Currently broken, see Compile & Run
+├── build/                             # Generated simulation outputs (gitignored)
 ├── documentation/
 │   ├── RV32I_Processor_Control_Signals.md
 │   ├── data_path.png
-│   └── waveform.png
-├── hardware/
-│   ├── src/
-│   │   └── core/
-│   │       ├── cpu_top.v              # Top-level single-cycle CPU
-│   │       ├── if/
-│   │       │   ├── inst_mem.v         # Instruction memory, reads program.hex
-│   │       │   ├── program_counter.v  # PC update logic with branch/jump support
-│   │       │   └── program.hex       # Program image for the CPU testbench
-│   │       ├── id/
-│   │       │   ├── branch.v           # Branch condition and target generation
-│   │       │   ├── control_unit.v     # Opcode decode and control signals
-│   │       │   ├── immediate_gen.v    # Sign-/zero-extended immediate generation
-│   │       │   └── jump.v             # JAL / JALR target logic
-│   │       ├── ex/
-│   │       │   ├── alu_control.v      # Decodes ALU op, funct3/funct7 and register fields
-│   │       │   ├── alu_module.v       # Arithmetic / logical ALU implementation
-│   │       │   ├── alu_src_mux.v      # Selects rs2_data or immediate for ALU input B
-│   │       │   └── reg_file.v         # 32 x 32 register file
-│   │       ├── mem/
-│   │       │   ├── data.hex           # Initial data memory contents
-│   │       │   └── data_memory.v      # Memory read/write implementation
-│   │       └── wb/
-│   │           └── writeback_mux.v    # Selects ALU result, memory data, or return address
-│   └── test_bench/
-│       ├── tb_cpu_top.v               # Top-level self-checking RTL testbench
-│       └── stage/
-│           ├── ex/
-│           ├── id/
-│           ├── if/
-│           ├── mem/
-│           └── wb/
-└──
+│   ├── waveform.png
+│   └── riscv-tests/
+│       ├── VERIFICATION.md            # Official rv32ui verification report
+│       └── REPRODUCING.md             # Re-run any single official test
+└── hardware/
+    ├── src/
+    │   ├── bus/
+    │   │   ├── wb_defs.vh             # Address-map / bus macros
+    │   │   ├── wb_master.v            # CPU-side Wishbone master
+    │   │   ├── wb_interconnect.v      # Address decode + slave mux
+    │   │   ├── wb_mac_accel.v         # MAC accelerator slave
+    │   │   ├── wb_err.v               # Catch-all error slave
+    │   │   └── wb_ram.v               # Testbench-only RAM slave
+    │   └── core/
+    │       ├── cpu_top_wb.v           # SoC top: core + bus + peripherals
+    │       ├── if/
+    │       │   ├── inst_mem.v         # Instruction memory (PROG_FILE parameter)
+    │       │   ├── program_counter.v  # PC update logic with branch/jump support
+    │       │   ├── program.hex        # 56-word demo program
+    │       │   └── program2.hex       # Official rv32ui image
+    │       ├── id/
+    │       │   ├── branch.v           # Branch condition and target generation
+    │       │   ├── control_unit.v     # Opcode decode and control signals
+    │       │   ├── immediate_gen.v    # Immediate generation
+    │       │   └── jump.v             # JAL / JALR target logic
+    │       ├── ex/
+    │       │   ├── alu_control.v      # Decodes ALU op, funct3/funct7
+    │       │   ├── alu_module.v       # Arithmetic / logical ALU
+    │       │   ├── alu_src_mux.v      # Selects rs2_data or immediate for ALU input B
+    │       │   └── reg_file.v         # 32 x 32 register file
+    │       ├── mem/
+    │       │   ├── data.hex           # Zero-initialised data memory
+    │       │   └── data_memory.v      # Local data memory
+    │       └── wb/
+    │           └── writeback_mux.v    # Selects ALU result, memory data, or return address
+    └── test_bench/
+        ├── tb_cpu_top_wb.v            # Self-checking SoC testbench
+        ├── rv32i_asm.vh               # Tiny RV32I assembler functions
+        ├── mac_driver.vh              # MAC driver program
+        ├── bus/
+        │   ├── tb_wb_ram.v
+        │   ├── tb_wb_master.v
+        │   ├── tb_wb_integ.v
+        │   ├── tb_wb_mac_accel.v
+        │   └── tb_wb_data.hex
+        └── stage/                     # Per-stage unit testbenches (ex, id, if, mem, wb)
 ```
 
 ## CPU Datapath
 
-<!-- Add your CPU datapath diagram here -->
 ![CPU Datapath](documentation/data_path.png)
+
+The diagram shows the core only and predates the bus.
 
 ## Supported Instructions
 
@@ -78,11 +96,86 @@ The current RTL implements a RV32I-style integer core with the following instruc
 
 This matches the control decode and ALU handling implemented in `control_unit.v`, `alu_control.v`, and `jump.v`.
 
+## Wishbone Bus
+
+Top level is [`cpu_top_wb.v`](hardware/src/core/cpu_top_wb.v) (module `cpu_top_wb`, ports `clk`, `reset`). It instantiates `wb_master` (`u_wb_master`), `wb_interconnect` (`u_wb_ic`), `wb_mac_accel` (`u_mac`) and `wb_err` (`u_wb_err`).
+
+```
+                      ┌────────────┐   ┌───────────────┐   ┌──────────────┐
+  RV32I core ───────► │ wb_master  │──►│ wb_interconn. │──►│ wb_mac_accel │
+ (ALU_result, store   └────────────┘   │               │   └──────────────┘
+  data, io_sel)                        │               │   ┌──────────────┐
+                                       │               │──►│   wb_err     │
+  local data_memory (0x0000_0000-      └───────────────┘   └──────────────┘
+  0x0000_FFFF), used when io_sel=0
+```
+
+**Flavour:** Wishbone Classic, non-pipelined, zero wait-state (`ACK` is combinational, `cyc & stb`), word-only. There is no `SEL`, so `SB`/`SH` to IO space write a full word. Signals: `CYC`, `STB`, `WE`, `ADR`, `DAT` (master to slave); `ACK`, `ERR`, `DAT` (slave to master). `ADDR_WIDTH = DATA_WIDTH = 32`. `wb_master` runs an effective IDLE → ACTIVE → IDLE FSM.
+
+**IO split.** Local `data_memory` owns `0x0000_0000`-`0x0000_FFFF`. A load/store goes to the bus when `(MemRead | MemWrite) & ALU_result[31:16] != 0`:
+
+| Signal | Definition |
+|--------|-----------|
+| `io_sel` | Access targets the bus |
+| `wb_req` | `io_sel & ~wb_busy & ~wb_done` |
+| `stall` | `io_sel & ~wb_done` (freezes the PC) |
+| `RegWrite_gated` | `RegWrite & ~stall` |
+| `mem_rdata` | `io_sel ? wb_rdat : mem_rdata_local` |
+
+A bus store takes 3 core cycles; a local load takes 1.
+
+**Address map** (decoded in `wb_interconnect.v`):
+
+| Slave | Select | Range | Notes |
+|-------|--------|-------|-------|
+| `wb_ram` | `adr[31:10] == 0` | `0x0000_0000`-`0x0000_03FF` (1 KB) | **Not instantiated in the SoC**; RAM port is stubbed. Local `data_memory` handles this range |
+| `wb_mac_accel` | `adr[31:16] == 16'h1000` | `0x1000_0000`-`0x1000_FFFF` (64 KB) | See below |
+| `wb_err` | catch-all (`~sel_ram & ~sel_mac`) | everything else | Always `ERR`, never `ACK`, reads 0 |
+
+Bus errors are observed, not trapped: `wb_err_flag` is observation-only and there is no trap. `o_irq` of the MAC is tied off.
+
+## MAC Accelerator
+
+[`wb_mac_accel.v`](hardware/src/bus/wb_mac_accel.v) computes `acc += SUM(A[i] * B[i])`, signed 32x32 to 64-bit, one element per clock. Params: `ADDR_WIDTH=16`, `DATA_WIDTH=32`, `BUF_AW=12` (4096-word buffers). `DONE` appears `LEN + 2` posedges after the `START` write.
+
+| Address | Name | Access | Description |
+|---------|------|--------|-------------|
+| `0x1000_0000` (+`0x0000`-`0x3FFF`) | `BUF_A` | R/W | 4096 words |
+| `0x1000_4000` (+`0x4000`-`0x7FFF`) | `BUF_B` | R/W | 4096 words |
+| `0x1000_8000` | `CTRL` | W | bit0 `START` (self-clearing; ignored if busy or `LEN == 0`), bit1 `CLR_ACC` (self-clearing) |
+| `0x1000_8004` | `STATUS` | R/W1C | bit0 `BUSY` (RO), bit1 `DONE` (sticky, write 1 to clear) |
+| `0x1000_8008` | `LEN` | R/W | Element count, clamps to 4096, ignored while busy |
+| `0x1000_800C` | `ACC_LO` | R/W | Accumulator [31:0], writes ignored while busy |
+| `0x1000_8010` | `ACC_HI` | R/W | Accumulator [63:32], writes ignored while busy |
+
+Registers at `0x1000_8000`+ alias every 32 bytes. The accumulator is **not** auto-cleared between runs.
+
+**Sequence:** `CLR_ACC` → fill `BUF_A` / `BUF_B` → write `LEN` → `START` → poll `STATUS.DONE` → read `ACC_LO` / `ACC_HI` → write `STATUS = 2` to clear `DONE`.
+
+**Performance:** roughly 8x faster than a software MAC loop. The bottleneck is the CPU feeding the accelerator over the bus, not the MAC computing.
+
+<details>
+<summary>How the ~8x is derived</summary>
+
+Estimate from the cycle budget, not a simulator-measured benchmark.
+
+| Operation | Cycles |
+|-----------|--------|
+| LW from local RAM | 1 |
+| SW to MAC over bus | 3 |
+| Per element (2 loads + 2 stores) | ~12 |
+| MAC compute | 1 |
+| Fixed overhead | ~20 |
+
+Net: ~13N + 20 cycles with the accelerator vs ~106N in software (RV32I has no `M` extension, so each multiply is a shift-add routine) => roughly 8x for large N.
+
+</details>
+
 ## Waveform Output
 
-The self-checking testbench [`tb_cpu_top.v`](hardware/test_bench/tb_cpu_top.v) runs a small program that exercises all supported instruction types — including arithmetic, load/store, branching, and jumping — and verifies correct execution at each cycle.
+The self-checking testbench [`tb_cpu_top_wb.v`](hardware/test_bench/tb_cpu_top_wb.v) checks the 56-instruction demo program cycle by cycle, then runs a MAC driver at `0xE0` that computes `dot([1,2,3,4],[5,6,7,8]) = 70` and prints `PASS: all checks passed`. It writes `cpu_top_wb.vcd` in the repo root (the working directory).
 
-The waveform below shows the simulation output captured from the `.vcd` dump:
+The waveform below was captured from `tb_cpu_top_wb.v`:
 
 ![Waveform Output](documentation/waveform.png)
 
@@ -118,194 +211,67 @@ Refer to [Processor_Control_Signals](documentation/RV32I_Processor_Control_Signa
 
 ## Compile & Run
 
-All commands are run from the repository root using `make`.
+All commands are run from the repository root.
 
 ### 1. Compile & Execute
-
-To compile the RTL sources and run the simulation in one step:
 
 ```bash
 make run
 ```
-Or simply:
-```bash
-make
-```
 
-When successful, a run will output:
+This builds the SoC with [`tb_cpu_top_wb.v`](hardware/test_bench/tb_cpu_top_wb.v), simulates it, and exits non-zero if any check fails (`vvp` itself always exits 0, so the Makefile scans the log for `FAIL`). A successful run ends with:
 
 ```text
-Compilation successful!
-Running simulation...
-...
+VCD info: dumpfile cpu_top_wb.vcd opened for output.
+PASS: all checks passed
 ```
 
-This generates `cpu_top.vcd` in the working directory when the simulation completes successfully.
+`$readmemh` "Not enough words" warnings are expected. The waveform is written to `cpu_top_wb.vcd` in the repo root, and the log to `build/cpu_tb.log`.
 
-### 2. Compile Only
-
-To just compile the design without running the simulation:
+To compile by hand instead:
 
 ```bash
-make compile
+mkdir -p build
+iverilog -I hardware/src/bus -I hardware/test_bench -o build/cpu_tb.out \
+  $(find hardware/src -name '*.v' ! -name 'wb_ram.v') \
+  hardware/test_bench/tb_cpu_top_wb.v && vvp build/cpu_tb.out
 ```
 
-### 3. Clean Workspace
-
-To remove build artifacts and waveform files:
+### 2. Makefile targets
 
 ```bash
-make clean
+make run      # compile + simulate the SoC testbench, fail on any FAIL
+make compile  # compile only, build/cpu_tb.out
+make bus      # run all four bus testbenches, stop at the first failure
+make clean    # remove build artifacts and *.vcd
+```
+
+### 3. Bus testbenches
+
+`make bus` runs `tb_wb_ram`, `tb_wb_master`, `tb_wb_integ` and `tb_wb_mac_accel` in turn; each prints PASS/FAIL counts. To run one by hand (MAC accelerator shown; `-I hardware/src/bus` is needed by every bench that includes `wb_defs.vh`):
+
+```bash
+iverilog -I hardware/src/bus -o /tmp/tb_mac.out hardware/src/bus/wb_mac_accel.v hardware/test_bench/bus/tb_wb_mac_accel.v && vvp /tmp/tb_mac.out
 ```
 
 ### 4. View Waveform
 
-Once a successful simulation has run and generated `cpu_top.vcd`, you can view it:
+Once a successful simulation has generated `cpu_top_wb.vcd`:
 
 ```bash
 # GTKWave
-gtkwave cpu_top.vcd
+gtkwave cpu_top_wb.vcd
 
 # Surfer
-surfer cpu_top.vcd
+surfer cpu_top_wb.vcd
 ```
 
-# RV32I SoC — Verification
+## Verification
 
-The processor implements **37 RV32I instructions** and all 37 were verified
-using the corresponding official `riscv-tests/isa/rv32ui` programs.
+**37/37 PASS** on the official `riscv-tests` `rv32ui` suite. The suite image is `hardware/src/core/if/program2.hex`; select it with `inst_mem #(.PROG_FILE("..."))`.
 
-**Result: 37/37 PASS**
-
-See `documentation/VERIFICATION.md` for the detailed verification report.
-
----
-
-## Reproduce an Official RISC-V Test
-
-The commands below are intended to be copied directly into the **VS Code
-PowerShell terminal**. Each code block has GitHub's copy button.
-
-### 1. Set paths and select a test
-
-Change only the paths and `$TEST` for your machine.
-
-```powershell
-$CPU_REPO  = "D:\VS code\rv32i-soc"
-$TEST_REPO = "D:\VS code\riscv-tests"
-$RISCV_BIN = "C:\SysGCC\risc-v\bin"
-
-$GCC      = "$RISCV_BIN\riscv64-unknown-elf-gcc.exe"
-$OBJCOPY  = "$RISCV_BIN\riscv64-unknown-elf-objcopy.exe"
-$IVERILOG = "C:\iverilog\bin\iverilog.exe"
-$VVP      = "C:\iverilog\bin\vvp.exe"
-
-$TEST = "sw"
-```
-
-Available tests are the official files in:
-
-```powershell
-Get-ChildItem "$TEST_REPO\isa\rv32ui\*.S" | Select-Object -ExpandProperty BaseName
-```
-
-### 2. Generate the instruction HEX
-
-```powershell
-cd $TEST_REPO
-
-& $GCC -march=rv32i -mabi=ilp32 -static -mcmodel=medany -fvisibility=hidden -nostdlib -nostartfiles -I".\env\cpu" -I".\isa\macros\scalar" -T".\env\p\link_cpu.ld" ".\isa\rv32ui\$TEST.S" -o ".\${TEST}_cpu.elf"
-
-& $OBJCOPY --remove-section .tohost ".\${TEST}_cpu.elf" ".\${TEST}_cpu_clean.elf"
-
-& $OBJCOPY --remove-section .riscv.attributes -O verilog --verilog-data-width=4 --reverse-bytes=4 ".\${TEST}_cpu_clean.elf" ".\${TEST}_code.hex"
-
-Copy-Item ".\${TEST}_code.hex" "$CPU_REPO\hardware\src\core\if\program.hex" -Force
-```
-
-### 3. For load/store tests, generate the data HEX
-
-Use this block only for:
-
-`lb lh lw lbu lhu sb sh sw`
-
-```powershell
-$MEM_TESTS = @("lb","lh","lw","lbu","lhu","sb","sh","sw")
-
-if ($MEM_TESTS -contains $TEST) {
-    & $OBJCOPY -j .data -O verilog --verilog-data-width=4 --reverse-bytes=4 ".\${TEST}_cpu_clean.elf" ".\${TEST}_data.hex"
-
-    (Get-Content ".\${TEST}_data.hex") -replace '^@00002000$', '@00000800' | Set-Content ".\${TEST}_data_cpu.hex"
-
-    Copy-Item "$CPU_REPO\hardware\src\core\mem\data.hex" "$CPU_REPO\hardware\src\core\mem\data_backup_before_${TEST}.hex" -Force
-
-    Copy-Item ".\${TEST}_data_cpu.hex" "$CPU_REPO\hardware\src\core\mem\data.hex" -Force
-}
-```
-
-### 4. Compile the CPU
-
-```powershell
-cd $CPU_REPO
-
-& $IVERILOG -o ".\cpu_debug_sim" -s tb_debug -g2012 (Get-ChildItem -Path ".\hardware\src" -Recurse -Filter *.v | ForEach-Object { $_.FullName }) ".\hardware\test_bench\tb_debug.v"
-```
-
-### 5. Run the test
-
-```powershell
-& $VVP ".\cpu_debug_sim"
-```
-
-Expected result:
-
-```text
-TOHOST: PASS (tohost=0x00000001)
-```
-
-### 6. Save the simulation log
-
-```powershell
-& $VVP ".\cpu_debug_sim" | Tee-Object "$CPU_REPO\build\${TEST}_pass.txt"
-```
-
----
-
-## Verification Flow
-
-```text
-Official .S
-   ↓
-RISC-V GCC
-   ↓
-ELF
-   ↓
-objcopy
-   ↓
-Verilog HEX
-   ↓
-program.hex / data.hex
-   ↓
-CPU RTL
-   ↓
-Icarus Verilog
-   ↓
-TOHOST PASS/FAIL
-```
-
-## Verified Instruction Set
-
-```text
-ADD SUB AND OR XOR SLL SRL SRA SLT SLTU
-ADDI ANDI ORI XORI SLLI SRLI SRAI SLTI SLTIU
-LB LH LW LBU LHU SB SH SW
-BEQ BNE BLT BGE BLTU BGEU JAL JALR
-LUI AUIPC
-```
-
-**37/37 implemented RV32I instructions passed their corresponding official
-`rv32ui` tests.**
-
+- [`documentation/riscv-tests/VERIFICATION.md`](documentation/riscv-tests/VERIFICATION.md) — the report: scope, methodology, the 37-row result matrix, and six waveform walkthroughs.
+- [`documentation/riscv-tests/REPRODUCING.md`](documentation/riscv-tests/REPRODUCING.md) — how to rebuild and re-run any single official test (PowerShell and bash).
 
 ## License
 

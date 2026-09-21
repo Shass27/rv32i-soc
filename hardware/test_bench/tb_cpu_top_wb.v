@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 
-module tb_cpu_top;
+module tb_cpu_top_wb;
 
     // ---------------------------------------------------------
     // Clock / reset
@@ -127,7 +127,7 @@ module tb_cpu_top;
     // ---------------------------------------------------------
     initial begin
         $dumpfile("cpu_top_wb.vcd");
-        $dumpvars(0, tb_cpu_top);
+        $dumpvars(0, tb_cpu_top_wb);
     end
 
     // Clock: 10 ns period

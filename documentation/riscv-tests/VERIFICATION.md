@@ -1,4 +1,6 @@
- Verification Report
+# Verification Report
+
+See also: [REPRODUCING.md](REPRODUCING.md) · [project README](../../README.md)
 
 This document records the functional verification of the RV32I SoC processor
 using the **official RISC-V architectural test suite** (`riscv-tests`,
@@ -104,6 +106,13 @@ All captures use the processor's control/datapath debug bus: `ALUControl`,
 `instr`, `pc`, `rd`/`rs1`/`rs2`, `rs1_data`/`rs2_data`, `MemRead`/
 `MemWrite`, `mem_rdata`, and `wb_data`.
 
+The testbenches named below (`tb_official_add`, `tb_official_slli`,
+`tb_official_beq`, `tb_official_jal`) are local scratch benches used to
+capture these waveforms and are not committed to the repo. The captures
+also predate the Wishbone bus, so the now-live `stall` / `RegWrite_gated`
+IO gating (asserted only during bus accesses at addresses >= `0x0001_0000`)
+never fires in them.
+
 ### 4.1 ADD — register-register arithmetic
 
 <img width="1527" height="867" alt="image" src="https://github.com/user-attachments/assets/9b5a7ae6-5810-41a7-b2c4-c79e4c6c9ba2" />
@@ -139,7 +148,7 @@ the `slli.S` sequence.
 
 
 
-Testbench: `tb_cpu_top` (`lw.vcd`). The effective address is computed as
+Testbench: `tb_cpu_top` (`lw.vcd`), a local run; the committed SoC bench is `tb_cpu_top_wb.v`. The effective address is computed as
 `rs1_data + imm` through the ALU (`ALUOp = 2`, base+offset addressing),
 `MemRead` is asserted, and the returned `mem_rdata` is routed to
 `wb_data` for register write-back. `pc` and `jump_ret_addr` progress in
@@ -152,7 +161,7 @@ test.
  <img width="1532" height="877" alt="image" src="https://github.com/user-attachments/assets/198d1586-425e-49cc-9c75-1d0564684b3e" />
 
 
-Testbench: `tb_cpu_top` (`sw.vcd`). As with LW, the effective address is
+Testbench: `tb_cpu_top` (`sw.vcd`), also a local run (see 4.3). As with LW, the effective address is
 generated via `rs1_data + imm`, but here `MemWrite` is the active memory
 control signal instead of `MemRead`, and `rs2_data` supplies the store
 data rather than a register destination write. The instruction and PC
@@ -166,7 +175,7 @@ computation and store-data routing for each store.
 Testbench: `tb_official_beq`. `ALUOp` alternates between `1` (branch
 compare) and `2` (address/offset arithmetic) as the test exercises both
 taken and not-taken branch cases. `branch_target` is computed each cycle,
-and `RegWrite`/`RegWrite_gate` toggle to reflect the bookkeeping
+and `RegWrite`/`RegWrite_gated` toggle to reflect the bookkeeping
 instructions between branches in `beq.S`. The repeating pattern across
 the trace (`rs1`/`rs2` compare → `ALU_result` → branch decision) confirms
 the branch-condition and target-computation logic behaves correctly for
@@ -189,82 +198,8 @@ link-register write-back across the `jal.S` sequence.
 
 ## 5. Reproducing a Test
 
-Commands below are written for the VS Code PowerShell terminal.
-
-### 5.1 Set paths and select a test
-
-```powershell
-$CPU_REPO  = "D:\VS code\rv32i-soc"
-$TEST_REPO = "D:\VS code\riscv-tests"
-$RISCV_BIN = "C:\SysGCC\risc-v\bin"
-
-$GCC      = "$RISCV_BIN\riscv64-unknown-elf-gcc.exe"
-$OBJCOPY  = "$RISCV_BIN\riscv64-unknown-elf-objcopy.exe"
-$IVERILOG = "C:\iverilog\bin\iverilog.exe"
-$VVP      = "C:\iverilog\bin\vvp.exe"
-
-$TEST = "sw"
-```
-
-List all available official tests:
-
-```powershell
-Get-ChildItem "$TEST_REPO\isa\rv32ui\*.S" | Select-Object -ExpandProperty BaseName
-```
-
-### 5.2 Generate the instruction HEX
-
-```powershell
-cd $TEST_REPO
-
-& $GCC -march=rv32i -mabi=ilp32 -static -mcmodel=medany -fvisibility=hidden -nostdlib -nostartfiles -I".\env\cpu" -I".\isa\macros\scalar" -T".\env\p\link_cpu.ld" ".\isa\rv32ui\$TEST.S" -o ".\${TEST}_cpu.elf"
-
-& $OBJCOPY --remove-section .tohost ".\${TEST}_cpu.elf" ".\${TEST}_cpu_clean.elf"
-
-& $OBJCOPY --remove-section .riscv.attributes -O verilog --verilog-data-width=4 --reverse-bytes=4 ".\${TEST}_cpu_clean.elf" ".\${TEST}_code.hex"
-
-Copy-Item ".\${TEST}_code.hex" "$CPU_REPO\hardware\src\core\if\program.hex" -Force
-```
-
-### 5.3 For load/store tests, generate the data HEX
-
-Only for: `lb lh lw lbu lhu sb sh sw`
-
-```powershell
-$MEM_TESTS = @("lb","lh","lw","lbu","lhu","sb","sh","sw")
-
-if ($MEM_TESTS -contains $TEST) {
-    & $OBJCOPY -j .data -O verilog --verilog-data-width=4 --reverse-bytes=4 ".\${TEST}_cpu_clean.elf" ".\${TEST}_data.hex"
-
-    (Get-Content ".\${TEST}_data.hex") -replace '^@00002000$', '@00000800' | Set-Content ".\${TEST}_data_cpu.hex"
-
-    Copy-Item "$CPU_REPO\hardware\src\core\mem\data.hex" "$CPU_REPO\hardware\src\core\mem\data_backup_before_${TEST}.hex" -Force
-
-    Copy-Item ".\${TEST}_data_cpu.hex" "$CPU_REPO\hardware\src\core\mem\data.hex" -Force
-}
-```
-
-### 5.4 Compile and run
-
-```powershell
-cd $CPU_REPO
-
-& $IVERILOG -o ".\cpu_debug_sim" -s tb_debug -g2012 (Get-ChildItem -Path ".\hardware\src" -Recurse -Filter *.v | ForEach-Object { $_.FullName }) ".\hardware\test_bench\tb_debug.v"
-
-& $VVP ".\cpu_debug_sim"
-```
-
-Expected output:
-
-```text
-TOHOST: PASS (tohost=0x00000001)
-```
-
-Save the log:
-
-```powershell
-& $VVP ".\cpu_debug_sim" | Tee-Object "$CPU_REPO\build\${TEST}_pass.txt"
-```
+Step-by-step commands (PowerShell and macOS / Linux bash) for building and
+running any official test are in [REPRODUCING.md](REPRODUCING.md).
 
 ---
 
@@ -276,7 +211,7 @@ part of a complete program involving register operations, comparisons,
 memory accesses, and control flow — rather than a single instruction in
 isolation. The assembly-to-HEX flow (Section 2) also gives a reproducible
 path from an unmodified official test source to processor execution,
-and the retained waveforms (Section 4) and logs (Section 5) serve as
+and the retained waveforms (Section 4) and the logs saved by the flow in Section 5 serve as
 evidence for future debugging and regression testing.
 
 ## 7. Conclusion

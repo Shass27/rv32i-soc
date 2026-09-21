@@ -112,7 +112,10 @@ Top level is [`cpu_top_wb.v`](hardware/src/core/cpu_top_wb.v) (module `cpu_top_w
 
 **Flavour:** Wishbone Classic, non-pipelined, zero wait-state (`ACK` is combinational, `cyc & stb`), word-only. There is no `SEL`, so `SB`/`SH` to IO space write a full word. Signals: `CYC`, `STB`, `WE`, `ADR`, `DAT` (master to slave); `ACK`, `ERR`, `DAT` (slave to master). `ADDR_WIDTH = DATA_WIDTH = 32`. `wb_master` runs an effective IDLE → ACTIVE → IDLE FSM.
 
-**IO split.** Local `data_memory` owns `0x0000_0000`-`0x0000_FFFF`. A load/store goes to the bus when `(MemRead | MemWrite) & ALU_result[31:16] != 0`:
+<details>
+<summary><b>IO split</b></summary>
+
+Local `data_memory` owns `0x0000_0000`-`0x0000_FFFF`. A load/store goes to the bus when `(MemRead | MemWrite) & ALU_result[31:16] != 0`:
 
 | Signal | Definition |
 |--------|-----------|
@@ -124,7 +127,10 @@ Top level is [`cpu_top_wb.v`](hardware/src/core/cpu_top_wb.v) (module `cpu_top_w
 
 A bus store takes 3 core cycles; a local load takes 1.
 
-**Address map** (decoded in `wb_interconnect.v`):
+</details>
+
+<details>
+<summary><b>Address map (decoded in `wb_interconnect.v`)</b></summary>
 
 | Slave | Select | Range | Notes |
 |-------|--------|-------|-------|
@@ -134,9 +140,14 @@ A bus store takes 3 core cycles; a local load takes 1.
 
 Bus errors are observed, not trapped: `wb_err_flag` is observation-only and there is no trap. `o_irq` of the MAC is tied off.
 
+</details>
+
 ## MAC Accelerator
 
 [`wb_mac_accel.v`](hardware/src/bus/wb_mac_accel.v) computes `acc += SUM(A[i] * B[i])`, signed 32x32 to 64-bit, one element per clock. Params: `ADDR_WIDTH=16`, `DATA_WIDTH=32`, `BUF_AW=12` (4096-word buffers). `DONE` appears `LEN + 2` posedges after the `START` write.
+
+<details>
+<summary><b>Register map</b></summary>
 
 | Address | Name | Access | Description |
 |---------|------|--------|-------------|
@@ -149,6 +160,8 @@ Bus errors are observed, not trapped: `wb_err_flag` is observation-only and ther
 | `0x1000_8010` | `ACC_HI` | R/W | Accumulator [63:32], writes ignored while busy |
 
 Registers at `0x1000_8000`+ alias every 32 bytes. The accumulator is **not** auto-cleared between runs.
+
+</details>
 
 **Sequence:** `CLR_ACC` → fill `BUF_A` / `BUF_B` → write `LEN` → `START` → poll `STATUS.DONE` → read `ACC_LO` / `ACC_HI` → write `STATUS = 2` to clear `DONE`.
 
@@ -183,7 +196,8 @@ Refer to [Processor_Control_Signals](documentation/RV32I_Processor_Control_Signa
 
 ## Setup
 
-### Prerequisites
+<details>
+<summary><b>Prerequisites</b></summary>
 
 1. **Icarus Verilog** — open-source Verilog simulation and synthesis tool.
 
@@ -209,6 +223,8 @@ Refer to [Processor_Control_Signals](documentation/RV32I_Processor_Control_Signa
    - [GTKWave](https://gtkwave.github.io/gtkwave/) — classic, widely-used VCD viewer
    - [Surfer](https://surfer-project.org/) — modern, fast waveform viewer
 
+</details>
+
 ## Compile & Run
 
 All commands are run from the repository root.
@@ -228,6 +244,9 @@ PASS: all checks passed
 
 `$readmemh` "Not enough words" warnings are expected. The waveform is written to `cpu_top_wb.vcd` in the repo root, and the log to `build/cpu_tb.log`.
 
+<details>
+<summary><b>Compile by hand</b></summary>
+
 To compile by hand instead:
 
 ```bash
@@ -237,7 +256,10 @@ iverilog -I hardware/src/bus -I hardware/test_bench -o build/cpu_tb.out \
   hardware/test_bench/tb_cpu_top_wb.v && vvp build/cpu_tb.out
 ```
 
-### 2. Makefile targets
+</details>
+
+<details>
+<summary><b>Makefile targets</b></summary>
 
 ```bash
 make run      # compile + simulate the SoC testbench, fail on any FAIL
@@ -246,7 +268,10 @@ make bus      # run all four bus testbenches, stop at the first failure
 make clean    # remove build artifacts and *.vcd
 ```
 
-### 3. Bus testbenches
+</details>
+
+<details>
+<summary><b>Bus testbenches</b></summary>
 
 `make bus` runs `tb_wb_ram`, `tb_wb_master`, `tb_wb_integ` and `tb_wb_mac_accel` in turn; each prints PASS/FAIL counts. To run one by hand (MAC accelerator shown; `-I hardware/src/bus` is needed by every bench that includes `wb_defs.vh`):
 
@@ -254,7 +279,10 @@ make clean    # remove build artifacts and *.vcd
 iverilog -I hardware/src/bus -o /tmp/tb_mac.out hardware/src/bus/wb_mac_accel.v hardware/test_bench/bus/tb_wb_mac_accel.v && vvp /tmp/tb_mac.out
 ```
 
-### 4. View Waveform
+</details>
+
+<details>
+<summary><b>View Waveform</b></summary>
 
 Once a successful simulation has generated `cpu_top_wb.vcd`:
 
@@ -265,6 +293,8 @@ gtkwave cpu_top_wb.vcd
 # Surfer
 surfer cpu_top_wb.vcd
 ```
+
+</details>
 
 ## Verification
 

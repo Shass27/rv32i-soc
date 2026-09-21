@@ -170,6 +170,143 @@ gtkwave cpu_top.vcd
 surfer cpu_top.vcd
 ```
 
+# RV32I SoC — Verification
+
+The processor implements **37 RV32I instructions** and all 37 were verified
+using the corresponding official `riscv-tests/isa/rv32ui` programs.
+
+**Result: 37/37 PASS**
+
+See `documentation/VERIFICATION.md` for the detailed verification report.
+
+---
+
+## Reproduce an Official RISC-V Test
+
+The commands below are intended to be copied directly into the **VS Code
+PowerShell terminal**. Each code block has GitHub's copy button.
+
+### 1. Set paths and select a test
+
+Change only the paths and `$TEST` for your machine.
+
+```powershell
+$CPU_REPO  = "D:\VS code\rv32i-soc"
+$TEST_REPO = "D:\VS code\riscv-tests"
+$RISCV_BIN = "C:\SysGCC\risc-v\bin"
+
+$GCC      = "$RISCV_BIN\riscv64-unknown-elf-gcc.exe"
+$OBJCOPY  = "$RISCV_BIN\riscv64-unknown-elf-objcopy.exe"
+$IVERILOG = "C:\iverilog\bin\iverilog.exe"
+$VVP      = "C:\iverilog\bin\vvp.exe"
+
+$TEST = "sw"
+```
+
+Available tests are the official files in:
+
+```powershell
+Get-ChildItem "$TEST_REPO\isa\rv32ui\*.S" | Select-Object -ExpandProperty BaseName
+```
+
+### 2. Generate the instruction HEX
+
+```powershell
+cd $TEST_REPO
+
+& $GCC -march=rv32i -mabi=ilp32 -static -mcmodel=medany -fvisibility=hidden -nostdlib -nostartfiles -I".\env\cpu" -I".\isa\macros\scalar" -T".\env\p\link_cpu.ld" ".\isa\rv32ui\$TEST.S" -o ".\${TEST}_cpu.elf"
+
+& $OBJCOPY --remove-section .tohost ".\${TEST}_cpu.elf" ".\${TEST}_cpu_clean.elf"
+
+& $OBJCOPY --remove-section .riscv.attributes -O verilog --verilog-data-width=4 --reverse-bytes=4 ".\${TEST}_cpu_clean.elf" ".\${TEST}_code.hex"
+
+Copy-Item ".\${TEST}_code.hex" "$CPU_REPO\hardware\src\core\if\program.hex" -Force
+```
+
+### 3. For load/store tests, generate the data HEX
+
+Use this block only for:
+
+`lb lh lw lbu lhu sb sh sw`
+
+```powershell
+$MEM_TESTS = @("lb","lh","lw","lbu","lhu","sb","sh","sw")
+
+if ($MEM_TESTS -contains $TEST) {
+    & $OBJCOPY -j .data -O verilog --verilog-data-width=4 --reverse-bytes=4 ".\${TEST}_cpu_clean.elf" ".\${TEST}_data.hex"
+
+    (Get-Content ".\${TEST}_data.hex") -replace '^@00002000$', '@00000800' | Set-Content ".\${TEST}_data_cpu.hex"
+
+    Copy-Item "$CPU_REPO\hardware\src\core\mem\data.hex" "$CPU_REPO\hardware\src\core\mem\data_backup_before_${TEST}.hex" -Force
+
+    Copy-Item ".\${TEST}_data_cpu.hex" "$CPU_REPO\hardware\src\core\mem\data.hex" -Force
+}
+```
+
+### 4. Compile the CPU
+
+```powershell
+cd $CPU_REPO
+
+& $IVERILOG -o ".\cpu_debug_sim" -s tb_debug -g2012 (Get-ChildItem -Path ".\hardware\src" -Recurse -Filter *.v | ForEach-Object { $_.FullName }) ".\hardware\test_bench\tb_debug.v"
+```
+
+### 5. Run the test
+
+```powershell
+& $VVP ".\cpu_debug_sim"
+```
+
+Expected result:
+
+```text
+TOHOST: PASS (tohost=0x00000001)
+```
+
+### 6. Save the simulation log
+
+```powershell
+& $VVP ".\cpu_debug_sim" | Tee-Object "$CPU_REPO\build\${TEST}_pass.txt"
+```
+
+---
+
+## Verification Flow
+
+```text
+Official .S
+   ↓
+RISC-V GCC
+   ↓
+ELF
+   ↓
+objcopy
+   ↓
+Verilog HEX
+   ↓
+program.hex / data.hex
+   ↓
+CPU RTL
+   ↓
+Icarus Verilog
+   ↓
+TOHOST PASS/FAIL
+```
+
+## Verified Instruction Set
+
+```text
+ADD SUB AND OR XOR SLL SRL SRA SLT SLTU
+ADDI ANDI ORI XORI SLLI SRLI SRAI SLTI SLTIU
+LB LH LW LBU LHU SB SH SW
+BEQ BNE BLT BGE BLTU BGEU JAL JALR
+LUI AUIPC
+```
+
+**37/37 implemented RV32I instructions passed their corresponding official
+`rv32ui` tests.**
+
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).

@@ -1,4 +1,4 @@
-<img width="1527" height="867" alt="image" src="https://github.com/user-attachments/assets/5048e599-8977-4322-b471-f6ac689a4833" /># RV32I SoC — Functional Verification Report
+ Verification Report
 
 This document records the functional verification of the RV32I SoC processor
 using the **official RISC-V architectural test suite** (`riscv-tests`,
@@ -120,6 +120,7 @@ its computed sum to the register file.
 
 ### 4.2 SLLI — immediate shift
 
+<img width="1526" height="862" alt="image" src="https://github.com/user-attachments/assets/ff1f2529-e73d-4166-9d4a-31bfa6d40869" />
 
 
 
@@ -134,6 +135,7 @@ the `slli.S` sequence.
 
 ### 4.3 LW — word load
 
+<img width="1532" height="897" alt="image" src="https://github.com/user-attachments/assets/f97b58eb-be9d-4f94-9496-68cdfc9c3711" />
 
 
 

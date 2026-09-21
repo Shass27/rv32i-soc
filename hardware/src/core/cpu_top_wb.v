@@ -1,4 +1,4 @@
-module cpu_top (
+module cpu_top_wb (
     input wire clk,
     input wire reset
 );

@@ -12,7 +12,7 @@ module tb_cpu_top;
     integer errors;
 
     // DUT: top-level CPU
-    cpu_top u_dut (
+    cpu_top_wb u_dut (
         .clk   (clk),
         .reset (reset)
     );
@@ -126,7 +126,7 @@ module tb_cpu_top;
     // This recreates cpu_top.vcd on each simulation run.
     // ---------------------------------------------------------
     initial begin
-        $dumpfile("cpu_top.vcd");
+        $dumpfile("cpu_top_wb.vcd");
         $dumpvars(0, tb_cpu_top);
     end
 

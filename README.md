@@ -177,7 +177,7 @@ using the corresponding official `riscv-tests/isa/rv32ui` programs.
 
 **Result: 37/37 PASS**
 
-See `docs/VERIFICATION.md` for the detailed verification report.
+See `documentation/VERIFICATION.md` for the detailed verification report.
 
 ---
 

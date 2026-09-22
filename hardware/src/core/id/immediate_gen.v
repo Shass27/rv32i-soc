@@ -10,12 +10,13 @@ module imm_gen (
     localparam STORE   = 7'b0100011; // S-type STORE : SB SH SW
     localparam BRANCH  = 7'b1100011; // B-type BRANCH : BEQ BNE BLT BGE BLTU BGEU
     localparam JAL     = 7'b1101111; // J-type : JAL
+    localparam JALR    = 7'b1100111; // I-type : JALR
     localparam LUI = 7'b0110111; // U-type : LUI
     localparam AUIPC = 7'b0010111; // U-type : AUIPC
 
     always @(*) begin
         case (opcode)
-            IMM, LOAD:
+            IMM, LOAD, JALR:
                 imm = {{20{instr[31]}}, instr[31:20]};
             STORE:
                 // S-type immediate

@@ -4,6 +4,7 @@
 // Region layout (top byte of 32-bit address):
 //   0x00xx_xxxx   Data RAM        (256 words, 1 KB)
 //   0x10xx_xxxx   MAC Accelerator (64 KB slot)
+//   0x2000_xxxx   DMA Controller  (64 KB slot, register page aliased every 32 B)
 //   0xFFxx_xxxx   Error slave     (catch-all for unmapped addresses)
 
 // ── Data RAM (wb_ram) ────────────────────────────────────────────────────────
@@ -35,6 +36,15 @@
 // STATUS bit positions
 `define WB_MAC_BUSY     0
 `define WB_MAC_DONE     1
+
+// ── DMA Controller (wb_dma) ─────────────────────────────────────────────────
+`define WB_DMA_BASE     32'h2000_0000
+`define WB_DMA_END      32'h2000_FFFF   // 64 KB slot; registers alias every 32 bytes
+`define WB_DMA_SRC      32'h2000_0000
+`define WB_DMA_DST      32'h2000_0004
+`define WB_DMA_LEN      32'h2000_0008
+`define WB_DMA_CTRL     32'h2000_000C
+`define WB_DMA_STATUS   32'h2000_0010
 
 // ── Error slave (wb_err) — catch-all ────────────────────────────────────────
 `define WB_ERR_BASE     32'hFFFF_0000

@@ -22,11 +22,11 @@ module tb_cpu_top_wb;
     // inst_mem/data_memory have run their own $readmemh at t=0.
     // ---------------------------------------------------------
     `include "rv32i_asm.vh"
-    `include "mac_driver.vh"
+    `include "dma_driver.vh"
 
     initial begin
         #1;
-        load_mac_driver;
+        load_dma_driver;
         load_mac_data;
     end
 
@@ -534,6 +534,14 @@ module tb_cpu_top_wb;
         end
     end
 
+    // Measured driver time: first posedge at DRV_BASE to first posedge at DRV_DONE
+    integer clk_n = 0, drv_t0 = -1, drv_t1 = -1;
+    always @(posedge clk) begin
+        #1 clk_n = clk_n + 1;
+        if (drv_t0 < 0 && u_dut.pc == DRV_BASE) drv_t0 = clk_n;
+        if (drv_t1 < 0 && u_dut.pc == DRV_DONE) drv_t1 = clk_n;
+    end
+
     // ---------------------------------------------------------
     // Stop after enough cycles and report result
     // ---------------------------------------------------------
@@ -544,13 +552,14 @@ module tb_cpu_top_wb;
         // 3 reset cycles + 50 instruction cycles + MAC driver (bus stalls, poll) + margin
         repeat (250) @(posedge clk);
 
-        // MAC driver results (parked at 0x14C)
-        check_eq32("mac-pc",     u_dut.pc,                       32'h0000014C);
-        check_eq32("mac-acc",    u_dut.u_mac.acc[31:0],          32'd70);
-        check_eq32("mac-x17",    u_dut.u_regfile.registers[17],  32'd70);
-        check_eq32("mac-x18",    u_dut.u_regfile.registers[18],  32'd0);
-        check_eq1 ("mac-idle",   u_dut.u_mac.busy,               1'b0);
-        check_eq1 ("mac-noerr",  u_dut.wb_err_flag,              1'b0);
+        // DMA driver results (parked at DRV_DONE)
+        check_eq32("dma-pc",     u_dut.pc,                       DRV_DONE);
+        check_eq32("dma-acc",    u_dut.u_mac.acc[31:0],          32'd70);
+        check_eq32("dma-x17",    u_dut.u_regfile.registers[17],  32'd70);
+        check_eq32("dma-x18",    u_dut.u_regfile.registers[18],  32'd0);
+        check_eq1 ("dma-idle",   u_dut.u_mac.busy,               1'b0);
+        check_eq1 ("dma-noerr",  u_dut.wb_err_flag,              1'b0);
+        $display("DMA driver: %0d cycles (DRV_BASE -> DRV_DONE, N=%0d)", drv_t1 - drv_t0, DRV_LEN);
 
         if (errors == 0) begin
             $display("PASS: all checks passed");

@@ -10,7 +10,11 @@ module data_memory #(
     //tells WHAT KIND/SIZE of memory operation shd be done 
     input  wire [31:0] mem_addr,
     input  wire [31:0] rs2_data,
-    output reg [31:0] mem_rdata
+    output reg [31:0] mem_rdata,
+    input  wire        i_b_we,   // port B (DMA) write enable, word-only
+    input  wire [31:0] i_b_addr, // port B byte address
+    input  wire [31:0] i_b_wdat, // port B write data
+    output wire [31:0] o_b_rdat  // port B async read data
 );
 
     reg [31:0] memory [0:MEM_SIZE-1];
@@ -29,6 +33,9 @@ module data_memory #(
         $readmemh("hardware/src/core/mem/data.hex", memory);
         tohost = 32'b0;
     end
+
+    // Port B asynchronous word read
+    assign o_b_rdat = memory[i_b_addr >> 2];
 
     // Asynchronous Read
     always @(*) begin
@@ -123,6 +130,11 @@ module data_memory #(
                 endcase
             end
         end
+    end
+
+    // Port B synchronous word write, no tohost check; software must avoid same-word A/B writes in one cycle
+    always @(posedge clk) begin
+        if (i_b_we) memory[i_b_addr >> 2] <= i_b_wdat;
     end
 
 endmodule

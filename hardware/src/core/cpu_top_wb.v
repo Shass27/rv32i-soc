@@ -63,6 +63,9 @@ module cpu_top_wb (
     wire [31:0] mem_rdata;          // local or Wishbone read data (muxed in MEM stage)
     wire [31:0] mem_rdata_local;
     wire [31:0] wb_data;
+    // port B wires — declared here so data_memory instantiation can use them
+    wire        b_we;
+    wire [31:0] b_addr, b_wdat, b_rdat;
 
     // --- Muxed signals ---
     wire [31:0] target;         // final target for PC
@@ -198,11 +201,11 @@ module cpu_top_wb (
         .rs2_data  (rs2_data),
         .funct3    (funct3),
         .mem_rdata (mem_rdata_local),
-        // port B reserved for DMA (phase 4)
-        .i_b_we    (1'b0),
-        .i_b_addr  (32'b0),
-        .i_b_wdat  (32'b0),
-        .o_b_rdat  ()
+        // port B: DMA local access path
+        .i_b_we    (b_we),
+        .i_b_addr  (b_addr),
+        .i_b_wdat  (b_wdat),
+        .o_b_rdat  (b_rdat)
     );
 
     // =========================================================
@@ -229,17 +232,29 @@ module cpu_top_wb (
     wire        mac_ack, mac_err, err_ack, err_err;
     wire        ic_ack, ic_err;
     wire [31:0] ic_dat;
+    // DMA slave port (interconnect → wb_dma register page)
+    wire        dma_s_cyc, dma_s_stb, dma_s_ack;
+    wire [31:0] dma_s_rdat;
 
     // One request pulse per IO instruction; never while the DMA owns the bus
     assign wb_req = io_sel & ~wb_busy & ~wb_done & ~dma_busy;
     // done pulse always releases, so the START store advances even though dma_busy rose on the same edge
     assign stall  = ~wb_done & (io_sel | dma_busy);
 
-    // DMA side tied off until wb_dma lands (phase 4)
-    assign dma_busy = 1'b0;
-    assign {dma_cyc, dma_stb, dma_we} = 3'b000;
-    assign dma_adr  = 32'b0;
-    assign dma_dat  = 32'b0;
+    wb_dma u_dma (
+        .i_clk    (clk),       .i_rst    (reset),
+        .i_s_cyc  (dma_s_cyc), .i_s_stb  (dma_s_stb),
+        .i_s_we   (m_we),      .i_s_adr  (m_adr),      // WE/ADR/DAT are broadcast
+        .i_s_dat  (m_dat),     .o_s_dat  (dma_s_rdat),
+        .o_s_ack  (dma_s_ack), .o_s_err  (),
+        .o_m_cyc  (dma_cyc),   .o_m_stb  (dma_stb),
+        .o_m_we   (dma_we),    .o_m_adr  (dma_adr),
+        .o_m_dat  (dma_dat),   .i_m_dat  (ic_dat),
+        .i_m_ack  (dma_ack),   .i_m_err  (dma_err),
+        .o_b_we   (b_we),      .o_b_addr (b_addr),
+        .o_b_wdat (b_wdat),    .i_b_rdat (b_rdat),
+        .o_busy   (dma_busy)
+    );
 
     // ponytail: CPU halts during DMA, so ownership is a plain mux on dma_busy.
     // Swap for a round-robin wb_arbiter when background DMA (UART streaming, double-buffering) is needed.
@@ -301,7 +316,13 @@ module cpu_top_wb (
         .o_err_stb   (err_stb),
         .i_err_dat   (err_dat),
         .i_err_ack   (err_ack),
-        .i_err_err   (err_err)
+        .i_err_err   (err_err),
+        // Slave 3: DMA register page at 0x2000_xxxx
+        .o_dma_cyc   (dma_s_cyc),
+        .o_dma_stb   (dma_s_stb),
+        .i_dma_dat   (dma_s_rdat),
+        .i_dma_ack   (dma_s_ack),
+        .i_dma_err   (1'b0)
     );
 
     wb_mac_accel u_mac (

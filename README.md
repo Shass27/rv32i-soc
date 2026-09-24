@@ -64,7 +64,7 @@ rv32i-soc/
     └── test_bench/
         ├── tb_cpu_top_wb.v            # Self-checking SoC testbench
         ├── rv32i_asm.vh               # Tiny RV32I assembler functions
-        ├── mac_driver.vh              # MAC driver program
+        ├── dma_driver.vh              # DMA-based driver: copies vectors into MAC, computes dot product
         ├── bus/
         │   ├── tb_wb_ram.v
         │   ├── tb_wb_master.v
@@ -136,7 +136,8 @@ A bus store takes 3 core cycles; a local load takes 1.
 |-------|--------|-------|-------|
 | `wb_ram` | `adr[31:10] == 0` | `0x0000_0000`-`0x0000_03FF` (1 KB) | **Not instantiated in the SoC**; RAM port is stubbed. Local `data_memory` handles this range |
 | `wb_mac_accel` | `adr[31:16] == 16'h1000` | `0x1000_0000`-`0x1000_FFFF` (64 KB) | See below |
-| `wb_err` | catch-all (`~sel_ram & ~sel_mac`) | everything else | Always `ERR`, never `ACK`, reads 0 |
+| `wb_dma` | `adr[31:16] == 16'h2000` | `0x2000_0000`-`0x2000_00FF` (5 regs) | DMA register page; CPU stalls while DMA owns the bus |
+| `wb_err` | catch-all (`~sel_ram & ~sel_mac & ~sel_dma`) | everything else | Always `ERR`, never `ACK`, reads 0 |
 
 Bus errors are observed, not trapped: `wb_err_flag` is observation-only and there is no trap. `o_irq` of the MAC is tied off.
 
@@ -186,7 +187,7 @@ Net: ~13N + 20 cycles with the accelerator vs ~106N in software (RV32I has no `M
 
 ## Waveform Output
 
-The self-checking testbench [`tb_cpu_top_wb.v`](hardware/test_bench/tb_cpu_top_wb.v) checks the 56-instruction demo program cycle by cycle, then runs a MAC driver at `0xE0` that computes `dot([1,2,3,4],[5,6,7,8]) = 70` and prints `PASS: all checks passed`. It writes `cpu_top_wb.vcd` in the repo root (the working directory).
+The self-checking testbench [`tb_cpu_top_wb.v`](hardware/test_bench/tb_cpu_top_wb.v) checks the 56-instruction demo program cycle by cycle, then runs a DMA driver at `0xE0` that copies vectors into the MAC over the DMA controller and computes `dot([1,2,3,4],[5,6,7,8]) = 70`, printing `PASS: all checks passed`. It writes `cpu_top_wb.vcd` in the repo root (the working directory).
 
 The waveform below was captured from `tb_cpu_top_wb.v`:
 

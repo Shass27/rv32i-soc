@@ -13,6 +13,7 @@ module cpu_top_wb (
 
     // --- Stall: held only while a Wishbone (IO) access is in flight ---
     wire        stall;
+    wire        dma_busy;       // DMA owns the bus and the CPU is frozen
 
     // --- Gated RegWrite: suppressed while stall is asserted ---
     wire        RegWrite_gated;
@@ -192,11 +193,16 @@ module cpu_top_wb (
     data_memory u_mem (
         .clk       (clk),
         .MemRead   (MemRead  & ~io_sel),
-        .MemWrite  (MemWrite & ~io_sel),
+        .MemWrite  (MemWrite & ~io_sel & ~dma_busy),   // a frozen SW must not collide with DMA port B
         .mem_addr  (ALU_result),
         .rs2_data  (rs2_data),
         .funct3    (funct3),
-        .mem_rdata (mem_rdata_local)
+        .mem_rdata (mem_rdata_local),
+        // port B reserved for DMA (phase 4)
+        .i_b_we    (1'b0),
+        .i_b_addr  (32'b0),
+        .i_b_wdat  (32'b0),
+        .o_b_rdat  ()
     );
 
     // =========================================================
@@ -211,6 +217,12 @@ module cpu_top_wb (
     wire        m_cyc, m_stb, m_we;
     wire [31:0] m_adr, m_dat;
 
+    // Per-master bus signals, muxed onto m_* by dma_busy
+    wire        cpu_cyc, cpu_stb, cpu_we, cpu_ack, cpu_err;
+    wire [31:0] cpu_adr, cpu_dat;
+    wire        dma_cyc, dma_stb, dma_we, dma_ack, dma_err;
+    wire [31:0] dma_adr, dma_dat;
+
     // Slave -> interconnect
     wire        ram_cyc, ram_stb, mac_cyc, mac_stb, err_cyc, err_stb;
     wire [31:0] mac_dat, err_dat;
@@ -218,9 +230,28 @@ module cpu_top_wb (
     wire        ic_ack, ic_err;
     wire [31:0] ic_dat;
 
-    // One request pulse per IO instruction; stall holds the core until the done pulse
-    assign wb_req = io_sel & ~wb_busy & ~wb_done;
-    assign stall  = io_sel & ~wb_done;
+    // One request pulse per IO instruction; never while the DMA owns the bus
+    assign wb_req = io_sel & ~wb_busy & ~wb_done & ~dma_busy;
+    // done pulse always releases, so the START store advances even though dma_busy rose on the same edge
+    assign stall  = ~wb_done & (io_sel | dma_busy);
+
+    // DMA side tied off until wb_dma lands (phase 4)
+    assign dma_busy = 1'b0;
+    assign {dma_cyc, dma_stb, dma_we} = 3'b000;
+    assign dma_adr  = 32'b0;
+    assign dma_dat  = 32'b0;
+
+    // ponytail: CPU halts during DMA, so ownership is a plain mux on dma_busy.
+    // Swap for a round-robin wb_arbiter when background DMA (UART streaming, double-buffering) is needed.
+    assign m_cyc = dma_busy ? dma_cyc : cpu_cyc;
+    assign m_stb = dma_busy ? dma_stb : cpu_stb;
+    assign m_we  = dma_busy ? dma_we  : cpu_we;
+    assign m_adr = dma_busy ? dma_adr : cpu_adr;
+    assign m_dat = dma_busy ? dma_dat : cpu_dat;
+    assign cpu_ack = ic_ack & ~dma_busy;   // ACK/ERR only reach the owner; ic_dat goes to both
+    assign cpu_err = ic_err & ~dma_busy;
+    assign dma_ack = ic_ack &  dma_busy;
+    assign dma_err = ic_err &  dma_busy;
 
     assign mem_rdata = io_sel ? wb_rdat : mem_rdata_local;
 
@@ -235,14 +266,14 @@ module cpu_top_wb (
         .o_busy   (wb_busy),
         .o_done   (wb_done),
         .o_err    (wb_err_flag),
-        .o_wb_cyc (m_cyc),
-        .o_wb_stb (m_stb),
-        .o_wb_we  (m_we),
-        .o_wb_adr (m_adr),
-        .o_wb_dat (m_dat),
+        .o_wb_cyc (cpu_cyc),
+        .o_wb_stb (cpu_stb),
+        .o_wb_we  (cpu_we),
+        .o_wb_adr (cpu_adr),
+        .o_wb_dat (cpu_dat),
         .i_wb_dat (ic_dat),
-        .i_wb_ack (ic_ack),
-        .i_wb_err (ic_err)
+        .i_wb_ack (cpu_ack),
+        .i_wb_err (cpu_err)
     );
 
     wb_interconnect u_wb_ic (

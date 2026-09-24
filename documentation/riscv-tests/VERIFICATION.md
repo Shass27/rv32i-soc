@@ -110,8 +110,8 @@ The testbenches named below (`tb_official_add`, `tb_official_slli`,
 `tb_official_beq`, `tb_official_jal`) are local scratch benches used to
 capture these waveforms and are not committed to the repo. The captures
 also predate the Wishbone bus, so the now-live `stall` / `RegWrite_gated`
-IO gating (asserted only during bus accesses at addresses >= `0x0001_0000`)
-never fires in them.
+IO gating (asserted only during bus accesses at addresses >= `0x0001_0000`
+or while the DMA is busy) never fires in them.
 
 ### 4.1 ADD — register-register arithmetic
 

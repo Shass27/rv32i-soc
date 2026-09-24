@@ -4,7 +4,7 @@
 // Address map (from wb_defs.vh):
 //   0x0000_0000 – 0x0000_03FF   wb_ram       (1 KB)
 //   0x1000_0000 – 0x1000_FFFF   wb_mac_accel (64 KB)
-//   0x2000_0000 – 0x2000_00FF   wb_dma       (register page)
+//   0x2000_0000 – 0x2000_FFFF   wb_dma       (register page, aliased every 32 B)
 //   everything else              wb_err       (catch-all → ERR)
 //
 // WE / ADR / DAT (master→slave) are broadcast to all slaves.
@@ -59,7 +59,7 @@ module wb_interconnect #(
     // ── Address decode ───────────────────────────────────────────────────────
     // RAM:  0x0000_0000 – 0x0000_03FF  → addr[31:10] == 0
     // MAC:  0x1000_0000 – 0x1000_FFFF  → addr[31:16] == 16'h1000
-    // DMA:  0x2000_0000 – 0x2000_00FF  → addr[31:16] == 16'h2000
+    // DMA:  0x2000_0000 – 0x2000_FFFF  → addr[31:16] == 16'h2000
     // ERR:  everything else
     wire sel_ram = (i_wb_adr[31:10] == 22'd0);
     wire sel_mac = (i_wb_adr[31:16] == 16'h1000);

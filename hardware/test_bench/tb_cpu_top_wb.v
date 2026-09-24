@@ -534,6 +534,14 @@ module tb_cpu_top_wb;
         end
     end
 
+    // Measured driver time: first posedge at DRV_BASE to first posedge at DRV_DONE
+    integer clk_n = 0, drv_t0 = -1, drv_t1 = -1;
+    always @(posedge clk) begin
+        #1 clk_n = clk_n + 1;
+        if (drv_t0 < 0 && u_dut.pc == DRV_BASE) drv_t0 = clk_n;
+        if (drv_t1 < 0 && u_dut.pc == DRV_DONE) drv_t1 = clk_n;
+    end
+
     // ---------------------------------------------------------
     // Stop after enough cycles and report result
     // ---------------------------------------------------------
@@ -551,10 +559,7 @@ module tb_cpu_top_wb;
         check_eq32("dma-x18",    u_dut.u_regfile.registers[18],  32'd0);
         check_eq1 ("dma-idle",   u_dut.u_mac.busy,               1'b0);
         check_eq1 ("dma-noerr",  u_dut.wb_err_flag,              1'b0);
-        $display("DMA: 4 cycles/word x %0d words x 2 transfers = %0d cycles",
-                 DRV_LEN, DRV_LEN * 4 * 2);
-        $display("CPU loop: ~14 cycles/word x %0d words x 2 copies = ~%0d cycles",
-                 DRV_LEN, DRV_LEN * 14 * 2);
+        $display("DMA driver: %0d cycles (DRV_BASE -> DRV_DONE, N=%0d)", drv_t1 - drv_t0, DRV_LEN);
 
         if (errors == 0) begin
             $display("PASS: all checks passed");

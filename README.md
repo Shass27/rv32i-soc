@@ -79,11 +79,11 @@ rv32i-soc/
             └── mem/tb_dp_mem.v        # Dual-port data_memory testbench
 ```
 
-## CPU Datapath
+## SoC Datapath
 
 ![CPU Datapath](documentation/data_path.png)
 
-The diagram shows the core only and predates the bus.
+The diagram shows the core, wishbone bus with DMA connection and Slaves
 
 ## Supported Instructions
 

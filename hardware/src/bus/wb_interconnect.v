@@ -1,9 +1,10 @@
 // wb_interconnect.v — Wishbone Classic address decoder + response mux
-// One master, three slaves: wb_ram / wb_mac_accel / wb_err (catch-all)
+// One master, four slaves: wb_ram / wb_mac_accel / wb_dma / wb_err (catch-all)
 //
 // Address map (from wb_defs.vh):
 //   0x0000_0000 – 0x0000_03FF   wb_ram       (1 KB)
 //   0x1000_0000 – 0x1000_FFFF   wb_mac_accel (64 KB)
+//   0x2000_0000 – 0x2000_FFFF   wb_dma       (register page, aliased every 32 B)
 //   everything else              wb_err       (catch-all → ERR)
 //
 // WE / ADR / DAT (master→slave) are broadcast to all slaves.
@@ -45,16 +46,25 @@ module wb_interconnect #(
     output wire                  o_err_stb,
     input  wire [DATA_WIDTH-1:0] i_err_dat,
     input  wire                  i_err_ack,   // always 0 from wb_err
-    input  wire                  i_err_err    // always 1 on access from wb_err
+    input  wire                  i_err_err,   // always 1 on access from wb_err
+
+    // ── Slave 3: wb_dma register page ────────────────────────────────────────
+    output wire                  o_dma_cyc,
+    output wire                  o_dma_stb,
+    input  wire [DATA_WIDTH-1:0] i_dma_dat,
+    input  wire                  i_dma_ack,
+    input  wire                  i_dma_err
 );
 
     // ── Address decode ───────────────────────────────────────────────────────
     // RAM:  0x0000_0000 – 0x0000_03FF  → addr[31:10] == 0
     // MAC:  0x1000_0000 – 0x1000_FFFF  → addr[31:16] == 16'h1000
+    // DMA:  0x2000_0000 – 0x2000_FFFF  → addr[31:16] == 16'h2000
     // ERR:  everything else
     wire sel_ram = (i_wb_adr[31:10] == 22'd0);
     wire sel_mac = (i_wb_adr[31:16] == 16'h1000);
-    wire sel_err = ~sel_ram & ~sel_mac;
+    wire sel_dma = (i_wb_adr[31:16] == 16'h2000);
+    wire sel_err = ~sel_ram & ~sel_mac & ~sel_dma;
 
     // ── CYC / STB routing ────────────────────────────────────────────────────
     assign o_ram_cyc = i_wb_cyc & sel_ram;
@@ -63,19 +73,25 @@ module wb_interconnect #(
     assign o_mac_cyc = i_wb_cyc & sel_mac;
     assign o_mac_stb = i_wb_stb & sel_mac;
 
+    assign o_dma_cyc = i_wb_cyc & sel_dma;
+    assign o_dma_stb = i_wb_stb & sel_dma;
+
     assign o_err_cyc = i_wb_cyc & sel_err;
     assign o_err_stb = i_wb_stb & sel_err;
 
     // ── Response mux (only one sel_* is high per cycle) ──────────────────────
     assign o_wb_ack = (sel_ram ? i_ram_ack : 1'b0)
-                    | (sel_mac ? i_mac_ack : 1'b0);
+                    | (sel_mac ? i_mac_ack : 1'b0)
+                    | (sel_dma ? i_dma_ack : 1'b0);
                     // wb_err never ACKs — i_err_ack omitted intentionally
 
     assign o_wb_err = (sel_mac ? i_mac_err : 1'b0)
+                    | (sel_dma ? i_dma_err : 1'b0)
                     | (sel_err ? i_err_err : 1'b0);
 
     assign o_wb_dat_sm = sel_ram ? i_ram_dat :
                          sel_mac ? i_mac_dat :
+                         sel_dma ? i_dma_dat :
                                    i_err_dat;
 
 endmodule

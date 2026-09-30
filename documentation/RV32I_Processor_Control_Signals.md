@@ -48,7 +48,7 @@ This document summarizes the major control signals used across the RV32I single-
 | ReadData1 | 32 | reg_file | Data read from register file operand 1. |
 | ReadData2 | 32 | reg_file | Data read from register file operand 2. |
 | WriteData | 32 | reg_file | Data sent to the destination register. |
-| stall | 1 | program_counter, cpu_top_wb | `io_sel & ~wb_done`. Freezes the PC (`program_counter.stall`) and, via `RegWrite_gated`, blocks register writeback for the whole bus transaction; released on the `wb_done` pulse. |
+| stall | 1 | program_counter, cpu_top_wb | `~wb_done & (io_sel \| dma_busy)`. Freezes the PC (`program_counter.stall`) and, via `RegWrite_gated`, blocks register writeback for the whole bus transaction and for as long as the DMA is busy; the `wb_done` pulse always releases it, so the SW that writes DMA `CTRL.START` advances even though `dma_busy` rises on the same edge. |
 | i_addr | 32 | inst_mem | Instruction memory address input. `inst_mem` has parameter `PROG_FILE` (default `"hardware/src/core/if/program.hex"`) and a 4097-word array (`mem[0:4096]`, word-indexed by `i_addr>>2`). |
 | o_inst | 32 | inst_mem | Instruction memory output. |
 | opcode | 7 | control_unit, alu_control, imm_gen | Opcode field (`instr[6:0]`) used to select instruction type and control behavior. |
@@ -58,6 +58,7 @@ This document summarizes the major control signals used across the RV32I single-
 | Item | Module | Description |
 |---|---|---|
 | PROG_FILE | inst_mem | Hex image loaded with `$readmemh`; default `"hardware/src/core/if/program.hex"`. Override to run another image. |
+| i_b_we, i_b_addr, i_b_wdat, o_b_rdat | data_memory | Port B (DMA local path, wired to `wb_dma.o_b_*` / `i_b_rdat`). Asynchronous word read (`o_b_rdat = memory[i_b_addr>>2]`), synchronous full-word write on `i_b_we`, no `TOHOST` check. A same-cycle port A/B write to the same word is undefined; the CPU halt during DMA prevents it. |
 | MEM_SIZE = 4097 | data_memory | Words in the local memory array (`memory[0:MEM_SIZE-1]`), preloaded from `hardware/src/core/mem/data.hex`. |
 | TOHOST_ADDR = 32'h000001c0 | data_memory | Address watched by the riscv-tests proxy. A write to it is intercepted (not stored in `memory`): value `1` prints `TOHOST: PASS` and calls `$finish`; any other nonzero value prints `TOHOST: FAIL` and calls `$finish`; `0` is only recorded in the internal `tohost` reg and simulation continues. |
 | pc | alu_module | See table above (`AUIPC_OP` only). |
@@ -68,26 +69,36 @@ Bottom 64 KB is served by local `data_memory`; any load/store with `ALU_result[3
 
 | Signal | Width | Description |
 |---|---|---|
-| io_sel | 1 | `(MemRead \| MemWrite) & (ALU_result[31:16] != 16'h0000)`. Also masks `MemRead`/`MemWrite` into `data_memory` (`& ~io_sel`). |
-| stall | 1 | `io_sel & ~wb_done`. Feeds `program_counter.stall`. |
+| io_sel | 1 | `(MemRead \| MemWrite) & (ALU_result[31:16] != 16'h0000)`. Also masks `MemRead`/`MemWrite` into `data_memory` port A: `MemRead & ~io_sel`, `MemWrite & ~io_sel & ~dma_busy` (a frozen SW must not collide with DMA port B). |
+| stall | 1 | `~wb_done & (io_sel \| dma_busy)`. Feeds `program_counter.stall`. |
+| dma_busy | 1 | `wb_dma.o_busy`. Halts the CPU (`stall`) and selects the DMA as bus owner. |
 | RegWrite_gated | 1 | `RegWrite & ~stall`; drives `reg_file.RegWrite`. |
 | mem_rdata_local | 32 | `data_memory` read output. |
 | mem_rdata | 32 | `io_sel ? wb_rdat : mem_rdata_local`; feeds `writeback_mux`. |
-| wb_req | 1 | `io_sel & ~wb_busy & ~wb_done`; one request pulse per IO instruction into `wb_master.i_req`. |
+| wb_req | 1 | `io_sel & ~wb_busy & ~wb_done & ~dma_busy`; one request pulse per IO instruction into `wb_master.i_req`, never while the DMA owns the bus. |
 | wb_busy | 1 | `wb_master.o_busy`. |
 | wb_done | 1 | `wb_master.o_done`, 1-cycle pulse; releases `stall`. |
 | wb_err_flag | 1 | `wb_master.o_err`; qualifies `wb_done`. Observation only: nothing in the core consumes it (no trap). |
 | wb_rdat | 32 | `wb_master.o_rdat`, captured read data. |
-| m_cyc, m_stb, m_we | 1 | Master outputs. `m_we` is broadcast to all slaves; `m_cyc`/`m_stb` go to the interconnect only. |
-| m_adr, m_dat | 32 | Master address / write data, broadcast to `wb_mac_accel` and `wb_err`. |
+| cpu_cyc, cpu_stb, cpu_we | 1 | `wb_master` (`u_wb_master`) Wishbone outputs. |
+| cpu_adr, cpu_dat | 32 | `wb_master` address / write data. |
+| cpu_ack, cpu_err | 1 | `ic_ack & ~dma_busy`, `ic_err & ~dma_busy`; into `wb_master.i_wb_ack` / `i_wb_err`. |
+| dma_cyc, dma_stb, dma_we | 1 | `wb_dma` master-port outputs (`o_m_*`). |
+| dma_adr, dma_dat | 32 | `wb_dma` master address / write data. |
+| dma_ack, dma_err | 1 | `ic_ack & dma_busy`, `ic_err & dma_busy`; into `wb_dma.i_m_ack` / `i_m_err`. |
+| m_cyc, m_stb, m_we | 1 | Bus-owner mux output: `dma_busy ? dma_* : cpu_*`. `m_we` is broadcast to all slaves; `m_cyc`/`m_stb` go to the interconnect only. |
+| m_adr, m_dat | 32 | Bus-owner mux output (`dma_busy ? dma_* : cpu_*`), broadcast to `wb_mac_accel`, `wb_dma` (slave port) and `wb_err`. |
 | ram_cyc, ram_stb | 1 | Interconnect RAM-slot outputs; declared but unconnected (RAM port stubbed: `i_ram_dat=0`, `i_ram_ack=0`). |
 | mac_cyc, mac_stb | 1 | Interconnect outputs to `wb_mac_accel`. |
 | err_cyc, err_stb | 1 | Interconnect outputs to `wb_err`. |
 | mac_dat, err_dat | 32 | Slave read data back to the interconnect. |
 | mac_ack, mac_err | 1 | `wb_mac_accel` responses (`mac_err` is always 0). |
+| dma_s_cyc, dma_s_stb | 1 | Interconnect outputs to the `wb_dma` slave (register page). |
+| dma_s_rdat | 32 | `wb_dma` register read data back to the interconnect. |
+| dma_s_ack | 1 | `wb_dma` slave ACK; the interconnect's `i_dma_err` is tied to 0. |
 | err_ack, err_err | 1 | `wb_err` responses (`err_ack` always 0, `err_err` = access). |
-| ic_ack, ic_err | 1 | Interconnect response to `wb_master.i_wb_ack` / `i_wb_err`. |
-| ic_dat | 32 | Interconnect read data to `wb_master.i_wb_dat`. |
+| ic_ack, ic_err | 1 | Interconnect response; split into `cpu_ack/err` and `dma_ack/err` by `dma_busy`. |
+| ic_dat | 32 | Interconnect read data to both `wb_master.i_wb_dat` and `wb_dma.i_m_dat`. |
 
 Bus is word-only (no `SEL`): `SB`/`SH` to IO space writes a full word. An IO access costs 3 cycles (request, ACTIVE with combinational ACK, done pulse); writeback and the PC advance happen on the `wb_done` cycle.
 
@@ -117,17 +128,18 @@ Effective FSM is IDLE -> ACTIVE -> IDLE. A `DONE` state is declared but unreacha
 
 ## wb_interconnect
 
-Ports: master side `i_wb_cyc/stb/we/adr/dat_ms`, `o_wb_dat_sm`, `o_wb_ack`, `o_wb_err`; per slave `o_*_cyc/stb`, `i_*_dat`, `i_*_ack`, plus `i_mac_err` and `i_err_err`. `i_err_ack` exists but is intentionally unused.
+Ports: master side `i_wb_cyc/stb/we/adr/dat_ms`, `o_wb_dat_sm`, `o_wb_ack`, `o_wb_err`; per slave (ram, mac, err, dma) `o_*_cyc/stb`, `i_*_dat`, `i_*_ack`, plus `i_mac_err`, `i_dma_err` and `i_err_err`. `i_err_ack` exists but is intentionally unused.
 
 | Item | Equation / note |
 |---|---|
 | sel_ram | `adr[31:10] == 22'd0` (0x0000_0000 - 0x0000_03FF) |
 | sel_mac | `adr[31:16] == 16'h1000` (0x1000_0000 - 0x1000_FFFF) |
-| sel_err | `~sel_ram & ~sel_mac` (catch-all) |
+| sel_dma | `adr[31:16] == 16'h2000` (0x2000_0000 - 0x2000_FFFF) |
+| sel_err | `~sel_ram & ~sel_mac & ~sel_dma` (catch-all) |
 | o_*_cyc / o_*_stb | `i_wb_cyc/stb & sel_*` |
-| o_wb_ack | `(sel_ram ? i_ram_ack : 0) \| (sel_mac ? i_mac_ack : 0)` |
-| o_wb_err | `(sel_mac ? i_mac_err : 0) \| (sel_err ? i_err_err : 0)` |
-| o_wb_dat_sm | `sel_ram ? i_ram_dat : sel_mac ? i_mac_dat : i_err_dat` |
+| o_wb_ack | `(sel_ram ? i_ram_ack : 0) \| (sel_mac ? i_mac_ack : 0) \| (sel_dma ? i_dma_ack : 0)` |
+| o_wb_err | `(sel_mac ? i_mac_err : 0) \| (sel_dma ? i_dma_err : 0) \| (sel_err ? i_err_err : 0)` |
+| o_wb_dat_sm | `sel_ram ? i_ram_dat : sel_mac ? i_mac_dat : sel_dma ? i_dma_dat : i_err_dat` |
 | wb_ram | Has no ERR port. |
 
 ## wb_mac_accel
@@ -145,6 +157,40 @@ Parameters: `ADDR_WIDTH = 16` (64 KB slot), `DATA_WIDTH = 32`, `BUF_AW = 12` (40
 | 0x8010 | ACC_HI | `acc[63:32]`, writable while idle. |
 
 Register page is aliased every 32 bytes (index = `offset[4:2]`); indices 5-7 read 0. Do not write buffers while BUSY.
+
+## wb_dma
+
+Single-channel word-copy DMA (any address to any address). Instantiated as `u_dma` in `cpu_top_wb`. Its master side is an internal `wb_master` (`u_master`), so the same 2-state FSM applies.
+
+| Port | Dir | Width | Description |
+|---|---|---|---|
+| i_clk, i_rst | in | 1 | Clock, synchronous reset. |
+| i_s_adr, i_s_dat | in | 32 | Slave address / write data (`m_adr` / `m_dat`, broadcast). |
+| i_s_we, i_s_stb, i_s_cyc | in | 1 | Slave control (`m_we`, `dma_s_stb`, `dma_s_cyc`). |
+| o_s_dat | out | 32 | Register read data. |
+| o_s_ack | out | 1 | Combinational `i_s_cyc & i_s_stb`. |
+| o_s_err | out | 1 | Always 0 (left unconnected in `cpu_top_wb`). |
+| o_m_cyc, o_m_stb, o_m_we | out | 1 | Master control from `u_master`. |
+| o_m_adr, o_m_dat | out | 32 | Master address / write data. |
+| i_m_dat | in | 32 | Master read data (`ic_dat`). |
+| i_m_ack, i_m_err | in | 1 | Master terminators (`dma_ack`, `dma_err`). |
+| o_b_we | out | 1 | `data_memory` port B write enable (`WR` state and DST local). |
+| o_b_addr | out | 32 | Port B byte address (`WR ? DST : SRC`). |
+| o_b_wdat | out | 32 | Port B write data (the fetched word). |
+| i_b_rdat | in | 32 | Port B read data. |
+| o_busy | out | 1 | `state != IDLE`; becomes `dma_busy`. |
+
+| Offset (from 0x2000_0000) | Name | Description |
+|---|---|---|
+| 0x00 | SRC | Source byte address; live counter (+4 per word). |
+| 0x04 | DST | Destination byte address; live counter (+4 per word). |
+| 0x08 | LEN | Words left; live counter (-1 per word, 0 after a full copy). |
+| 0x0C | CTRL | `[0]` START, self-clearing, reads 0. Ignored while BUSY or if `LEN == 0`; clears DONE and ERR. |
+| 0x10 | STATUS | `[0]` BUSY (RO), `[1]` DONE, `[2]` ERR (both sticky, write 1 to clear). |
+
+SRC/DST/LEN/CTRL writes are ignored while BUSY. Register page is aliased every 32 bytes (index = `offset[4:2]`); indices 5-7 read 0. `addr[1:0]` is ignored (word-only).
+
+FSM: IDLE -> RD -> WR -> (RD \| IDLE). Each side is local (port B, 1 cycle) if `addr[31:16] == 0`, else a bus access through `u_master`. A bus ERR in RD or WR goes to IDLE with DONE = 1 and ERR = 1; SRC/DST/LEN do not advance. Header-comment estimate, cycles per word: local->local 2, local->bus / bus->local 4, bus->bus 6.
 
 ## wb_err / wb_ram
 
@@ -175,10 +221,17 @@ Register page is aliased every 32 bytes (index = `offset[4:2]`); indices 5-7 rea
 | WB_MAC_CLR_ACC | 1 |
 | WB_MAC_BUSY | 0 |
 | WB_MAC_DONE | 1 |
+| WB_DMA_BASE | 32'h2000_0000 |
+| WB_DMA_END | 32'h2000_FFFF |
+| WB_DMA_SRC | 32'h2000_0000 |
+| WB_DMA_DST | 32'h2000_0004 |
+| WB_DMA_LEN | 32'h2000_0008 |
+| WB_DMA_CTRL | 32'h2000_000C |
+| WB_DMA_STATUS | 32'h2000_0010 |
 | WB_ERR_BASE | 32'hFFFF_0000 |
 | WB_ERR_END | 32'hFFFF_FFFF |
 
-Caveat: the `wb_defs.vh` header describes regions by top byte, and `WB_ERR_*` suggests a 0xFFFF_xxxx range. The real decode uses `adr[31:10]` (RAM) and `adr[31:16]` (MAC), and the error slave is a catch-all, so e.g. 0x0000_0800 (outside the 1 KB RAM) and 0x1001_0000 hit `wb_err`. In the SoC the low 64 KB never reaches the bus (`io_sel`), so RAM-slot addresses are unreachable there.
+Caveat: the `wb_defs.vh` header describes regions by top byte, and `WB_ERR_*` suggests a 0xFFFF_xxxx range. The real decode uses `adr[31:10]` (RAM) and `adr[31:16]` (MAC `16'h1000`, DMA `16'h2000`), and the error slave is a catch-all, so e.g. 0x0000_0800 (outside the 1 KB RAM), 0x1001_0000 and 0x2001_0000 hit `wb_err`. The DMA owns its full 64 KB slot (registers alias every 32 bytes). In the SoC the low 64 KB never reaches the bus (`io_sel`), so RAM-slot addresses are unreachable there.
 
 > Signal names follow the RTL as implemented. `branch_logic`, `jump_logic` and `imm_gen` are the real module identifiers. The final PC target is selected in `cpu_top_wb` (`jump ? jump_target : branch_target`); the PC then chooses between `target` and `pc + 4` using `branch_taken | jump1 | jump2`, unless `stall` holds it.
 

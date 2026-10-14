@@ -1,5 +1,5 @@
 module inst_mem #(
-      parameter PROG_FILE = "hardware/src/core/if/program.hex" // override to run another image, e.g. program2.hex
+      parameter PROG_FILE = "program.hex" // override to run another image, e.g. program2.hex
     )(
       input [31:0] i_addr, output [31:0] o_inst
     );

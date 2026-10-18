@@ -234,7 +234,7 @@ module tb_wb_dma;
         reg_rd(R_LEN, rd); check(rd, 0, "busy-write ignored: LEN");
 
         // --- 8. bus error: DST in unmapped space ---
-        run(32'h100, 32'h3000_0000, 4, n);
+        run(32'h100, 32'h4000_0000, 4, n);
         reg_rd(R_STATUS, rd); check(rd, 32'b110, "ERR + DONE on unmapped DST");
         reg_rd(R_LEN, rd);    check(rd, 4, "ERR stops before advancing");
         reg_wr(R_STATUS, 32'b100);

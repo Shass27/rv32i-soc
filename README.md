@@ -1,6 +1,6 @@
 # RV32I SoC
 
-A single-cycle RISC-V RV32I core in Verilog, extended into a small SoC: a Wishbone B4 Classic bus, a MAC accelerator, a DMA controller, and an error slave. The core executes one instruction per clock cycle (**Fetch → Decode → Execute → Memory → Writeback**, wired combinationally) and stalls only on bus (IO) accesses and while the DMA is copying. Simulated with [Icarus Verilog](https://steveicarus.github.io/iverilog/); a self-checking SoC testbench verifies the demo program and a MAC dot-product whose operands are copied in by the DMA, and the core passes all 37 official `rv32ui` tests.
+A single-cycle RISC-V RV32I core in Verilog, extended into a small SoC: a Wishbone B4 Classic bus, a MAC accelerator, a merge-sort accelerator, a DMA controller, and an error slave. The core executes one instruction per clock cycle (**Fetch → Decode → Execute → Memory → Writeback**, wired combinationally) and stalls only on bus (IO) accesses and while the DMA is copying. Simulated with [Icarus Verilog](https://steveicarus.github.io/iverilog/); a self-checking SoC testbench verifies the demo program and a MAC dot-product whose operands are copied in by the DMA, and the core passes all 37 official `rv32ui` tests.
 
 ## Table of Contents
 
@@ -8,7 +8,7 @@ A single-cycle RISC-V RV32I core in Verilog, extended into a small SoC: a Wishbo
 - [CPU Datapath](#cpu-datapath)
 - [Supported Instructions](#supported-instructions)
 - [Wishbone Bus](#wishbone-bus)
-- [MAC Accelerator](#mac-accelerator)
+- [Accelerators and Analysis](#accelerators-and-analysis)
 - [DMA Controller](#dma-controller)
 - [Waveform Output](#waveform-output)
 - [Setup](#setup)
@@ -23,11 +23,14 @@ rv32i-soc/
 ├── README.md
 ├── LICENSE
 ├── Makefile                           # make run / compile / bus / clean
+├── program_sort.hex                   # 10-word driver for tb_cpu_top_wb_sort.v
 ├── build/                             # Generated simulation outputs (gitignored)
 ├── documentation/
 │   ├── RV32I_Processor_Control_Signals.md
 │   ├── data_path.png
-│   ├── waveform.png
+│   ├── media/
+│   │   ├── waveform_mac.png           # tb_cpu_top_wb_mac.v (DMA + MAC) waveform
+│   │   └── waveform_sort.png          # tb_cpu_top_wb_sort.v waveform
 │   └── riscv-tests/
 │       ├── VERIFICATION.md            # Official rv32ui verification report
 │       └── REPRODUCING.md             # Re-run any single official test
@@ -39,6 +42,7 @@ rv32i-soc/
     │   │   ├── wb_interconnect.v      # Address decode + slave mux
     │   │   ├── wb_mac_accel.v         # MAC accelerator slave
     │   │   ├── wb_dma.v               # DMA controller (slave registers + bus master)
+    │   │   ├── wb_sort.v              # Merge-sort accelerator (slave registers + data_memory port B)
     │   │   ├── wb_err.v               # Catch-all error slave
     │   │   └── wb_ram.v               # Testbench-only RAM slave
     │   └── core/
@@ -64,7 +68,8 @@ rv32i-soc/
     │       └── wb/
     │           └── writeback_mux.v    # Selects ALU result, memory data, or return address
     └── test_bench/
-        ├── tb_cpu_top_wb.v            # Self-checking SoC testbench
+        ├── tb_cpu_top_wb_mac.v        # Self-checking SoC testbench (DMA + MAC), make run
+        ├── tb_cpu_top_wb_sort.v       # Self-checking SoC testbench (SORT), make sort
         ├── rv32i_asm.vh               # Tiny RV32I assembler functions
         ├── dma_driver.vh              # Used by make run: DMA copies vectors into MAC, computes dot product
         ├── mac_driver.vh              # CPU-copy baseline driver (not used by make run)
@@ -74,6 +79,7 @@ rv32i-soc/
         │   ├── tb_wb_integ.v
         │   ├── tb_wb_mac_accel.v
         │   ├── tb_wb_dma.v
+        │   ├── tb_wb_sort.v
         │   └── tb_wb_data.hex
         └── stage/                     # Per-stage unit testbenches (ex, id, if, mem, wb)
             └── mem/tb_dp_mem.v        # Dual-port data_memory testbench
@@ -103,7 +109,7 @@ This matches the control decode and ALU handling implemented in `control_unit.v`
 
 ## Wishbone Bus
 
-Top level is [`cpu_top_wb.v`](hardware/src/core/cpu_top_wb.v) (module `cpu_top_wb`, ports `clk`, `reset`). It instantiates `wb_master` (`u_wb_master`), `wb_interconnect` (`u_wb_ic`), `wb_mac_accel` (`u_mac`), `wb_dma` (`u_dma`) and `wb_err` (`u_wb_err`).
+Top level is [`cpu_top_wb.v`](hardware/src/core/cpu_top_wb.v) (module `cpu_top_wb`, ports `clk`, `reset`). It instantiates `wb_master` (`u_wb_master`), `wb_interconnect` (`u_wb_ic`), `wb_mac_accel` (`u_mac`), `wb_dma` (`u_dma`), `wb_sort` (`u_sort`) and `wb_err` (`u_wb_err`). It also exposes a `debug_pc` output (the current `pc`).
 
 ```
                   ┌────────────┐   ┌───────┐   ┌───────────────┐   ┌──────────────┐
@@ -113,13 +119,16 @@ Top level is [`cpu_top_wb.v`](hardware/src/core/cpu_top_wb.v) (module `cpu_top_w
                   │ wb_dma     │──►│       │   │               │──►│ wb_dma regs  │  0x2000_xxxx
                   │ (master)   │   └───▲───┘   │               │   └──────────────┘
                   └─────┬──────┘       │       │               │   ┌──────────────┐
-                        │ port B    dma_busy   │               │──►│   wb_err     │  everything else
-                        ▼                      └───────────────┘   └──────────────┘
-  RV32I core ───► data_memory (dual-port, 0x0000_0000-0x0000_FFFF)
+                        │ port B    dma_busy   │               │──►│  wb_sort     │  0x3000_xxxx
+                        │              │       │               │   └──────┬───────┘
+                        │              │       │               │   ┌──────┼───────┐
+                        │              │       └───────────────┘──►│   wb_err     │  everything else
+                        ▼              ▼                           └──────┼───────┘
+  RV32I core ───► data_memory (dual-port, 0x0000_0000-0x0000_FFFF) ◄──────┘ sort (port B, idle-DMA only)
   (io_sel=0)  port A
 ```
 
-`u_dma` appears twice: as a slave (its register page) and as a second bus master. The 2:1 mux hands the bus to the DMA while `dma_busy` is high; `ACK`/`ERR` go only to the current owner, read data goes to both.
+`u_dma` appears twice: as a slave (its register page) and as a second bus master. The 2:1 mux hands the bus to the DMA while `dma_busy` is high; `ACK`/`ERR` go only to the current owner, read data goes to both. `u_sort` is a plain slave on the bus but reaches `data_memory` through port B, which it shares with the DMA: while `dma_busy` is high the DMA owns port B and the sorter pauses (`sort_mem_grant = ~dma_busy`).
 
 **Flavour:** Wishbone Classic, non-pipelined, zero wait-state (`ACK` is combinational, `cyc & stb`), word-only. There is no `SEL`, so `SB`/`SH` to IO space write a full word. Signals: `CYC`, `STB`, `WE`, `ADR`, `DAT` (master to slave); `ACK`, `ERR`, `DAT` (slave to master). `ADDR_WIDTH = DATA_WIDTH = 32`. `wb_master` runs an effective IDLE → ACTIVE → IDLE FSM.
 
@@ -138,7 +147,7 @@ Local `data_memory` owns `0x0000_0000`-`0x0000_FFFF`. A load/store goes to the b
 | `RegWrite_gated` | `RegWrite & ~stall` |
 | `mem_rdata` | `io_sel ? wb_rdat : mem_rdata_local` |
 
-A bus store takes 3 core cycles; a local load takes 1.
+A bus store takes 3 core cycles (4 to `wb_sort`, whose `ACK` is registered); a local load takes 1.
 
 </details>
 
@@ -150,13 +159,19 @@ A bus store takes 3 core cycles; a local load takes 1.
 | `wb_ram` | `adr[31:10] == 0` | `0x0000_0000`-`0x0000_03FF` (1 KB) | **Not instantiated in the SoC**; RAM port is stubbed. Local `data_memory` handles this range |
 | `wb_mac_accel` | `adr[31:16] == 16'h1000` | `0x1000_0000`-`0x1000_FFFF` (64 KB) | See below |
 | `wb_dma` | `adr[31:16] == 16'h2000` | `0x2000_0000`-`0x2000_FFFF` (64 KB) | DMA register page, aliased every 32 B; see [DMA Controller](#dma-controller) |
-| `wb_err` | catch-all (`~sel_ram & ~sel_mac & ~sel_dma`) | everything else | Always `ERR`, never `ACK`, reads 0 |
+| `wb_sort` | `adr[31:16] == 16'h3000` | `0x3000_0000`-`0x3000_FFFF` (64 KB) | Sort register page, decoded on `adr[5:2]` (aliased every 64 B); see [Accelerators and Analysis](#accelerators-and-analysis) |
+| `wb_err` | catch-all (`~sel_ram & ~sel_mac & ~sel_dma & ~sel_sort`) | everything else | Always `ERR`, never `ACK`, reads 0 |
 
 Bus errors are observed, not trapped: `wb_err_flag` is observation-only and there is no trap. `o_irq` of the MAC is tied off.
 
 </details>
 
-## MAC Accelerator
+## Accelerators and Analysis
+
+Two bus slaves offload work from the CPU. Expand each for its register map, usage sequence and performance. Cycle totals marked *simulated* come from the testbench; those marked *estimate* are derived by hand and not measured.
+
+<details>
+<summary><b>MAC Accelerator</b></summary>
 
 [`wb_mac_accel.v`](hardware/src/bus/wb_mac_accel.v) computes `acc += SUM(A[i] * B[i])`, signed 32x32 to 64-bit, one element per clock. Params: `ADDR_WIDTH=16`, `DATA_WIDTH=32`, `BUF_AW=12` (4096-word buffers). `DONE` appears `LEN + 2` posedges after the `START` write.
 
@@ -203,6 +218,62 @@ The software MAC is an **estimate**, not measured: RV32I has no `M` extension, s
 
 </details>
 
+</details>
+
+<details>
+<summary><b>SORT Accelerator</b></summary>
+
+[`wb_sort.v`](hardware/src/bus/wb_sort.v) sorts `LEN` 32-bit words into ascending order (**unsigned** compare) with a bottom-up merge sort: run width 1, 2, 4, … doubles each pass, ping-ponging between the `SRC` and `DST` buffers. If the last pass lands in `SRC` it copies the result back to `DST`, so the sorted data is always at `DST`. **`SRC` is overwritten** with intermediate runs. Both buffers are in the local `data_memory`, which the sorter reaches through port B, so addresses must be below `0x0001_0000`.
+
+<details>
+<summary><b>Register map</b></summary>
+
+| Address | Name | Access | Description |
+|---------|------|--------|-------------|
+| `0x3000_0000` | `SRC` | R/W | Source buffer byte address |
+| `0x3000_0004` | `DST` | R/W | Destination buffer byte address (sorted result) |
+| `0x3000_0008` | `LEN` | R/W | Word count; `0` finishes immediately, `1` copies (or does nothing if `SRC == DST`) |
+| `0x3000_000C` | `CTRL` | W | bit0 `START` (one-cycle pulse; only acted on in `IDLE`) |
+| `0x3000_0010` | `STATUS` | R | bit0 `BUSY`, bit1 `DONE` |
+
+Registers are selected by `adr[5:2]`, so the page aliases every 64 bytes. Unlike the MAC and DMA, `DONE` is **not** write-1-to-clear: it stays set until the next `START`. Register writes are not blocked while busy, so do not change `SRC`/`DST`/`LEN` mid-sort.
+
+</details>
+
+**Sequence:** write `SRC` → `DST` → `LEN` → `START` → poll `STATUS.DONE` → read the sorted words from `DST`. The CPU is **not** stalled while sorting (unlike the DMA), so software must poll and must not touch the buffers meanwhile; a CPU store into `data_memory` in the same cycle as a sorter write wins and the sorter's write is dropped.
+
+**DMA interaction:** if the DMA starts during a sort, the sorter holds its pending write and resumes when `dma_busy` falls (checked by `tb_wb_sort`).
+
+**Performance:** a merge step takes 5 cycles while both runs have data (`MERGE → READ_LEFT → READ_RIGHT → WRITE_OUT → ADVANCE`) and 4 once one run is exhausted, so the sorter costs about 5.4 cycles per element per pass (`p = ⌈log2 N⌉` passes), independent of the value width. The CPU is free while it runs.
+
+<details>
+<summary>Measured totals vs software estimate</summary>
+
+Sorter totals are **simulated** (`START` write to `DONE`, `wb_sort` driven directly on the bus with a zero-wait memory, DMA idle, in a scratch bench not in the repo). The fit is `T ≈ 5.4·N·p`, bounded above by `5·N·p + N + 2p + 5` (+ `3N` copy-back when `p` is even).
+
+| N | Passes | Random data (cycles) | Reversed data (cycles) |
+|---|---|-----|-----|
+| 8 | 3 | 128 | 125 |
+| 16 | 4 | 378 | 363 |
+| 64 | 6 | 2114 | 1999 |
+| 256 | 8 | 10967 | 10259 |
+
+The software sort is an **estimate**, not measured: a merge loop on RV32I needs roughly 12-18 instructions per element per pass (two loads, compare, branch, store, pointer and bounds updates; 1 cycle each on this core).
+
+| Software merge loop | Software cycles/element-pass (est.) | Speed-up vs sorter (~5.4/elem-pass) |
+|---|---|---|
+| Tight, hand-scheduled | ~12 | ~2.2x |
+| Typical | ~15 | ~2.8x |
+| Compiler output, bounds checks | ~18 | ~3.3x |
+
+For N = 256 that is ~24.6k-36.9k software cycles against 10,967 for the sorter (the speed-up holds at ~2.0x-3.4x for all N above). The gain is modest because the sorter is a serial FSM on a single memory port, so its main benefit is freeing the CPU. Register setup (four bus stores) is not included.
+
+</details>
+
+**Tests:** `tb_wb_sort` (bus-level, 103 tests over many lengths and patterns, 96 with a DMA interruption; prints `ALL TESTS PASSED`) and `tb_cpu_top_wb_sort` (the CPU runs `program_sort.hex`, programs the sorter and sorts 8 words at `0x100` into `0x140`; prints `PASS: CPU-driven SORT integration test passed.`). Run it with `make sort` (not part of `make run`).
+
+</details>
+
 ## DMA Controller
 
 [`wb_dma.v`](hardware/src/bus/wb_dma.v) is a single-channel word-copy engine: any address to any address. It is a slave at `0x2000_0000` (the CPU programs its registers) and a second bus master (it moves the data).
@@ -239,11 +310,17 @@ Registers alias every 32 bytes across `0x2000_0000`-`0x2000_FFFF`. `addr[1:0]` i
 
 ## Waveform Output
 
-The self-checking testbench [`tb_cpu_top_wb.v`](hardware/test_bench/tb_cpu_top_wb.v) checks the 56-instruction demo program cycle by cycle, then runs a DMA driver at `0xE0` that copies vectors into the MAC over the DMA controller and computes `dot([1,2,3,4],[5,6,7,8]) = 70`, printing `PASS: all checks passed`. It writes `cpu_top_wb.vcd` in the repo root (the working directory).
+The self-checking testbench [`tb_cpu_top_wb_mac.v`](hardware/test_bench/tb_cpu_top_wb_mac.v) checks the 56-instruction demo program cycle by cycle, then runs a DMA driver at `0xE0` that copies vectors into the MAC over the DMA controller and computes `dot([1,2,3,4],[5,6,7,8]) = 70`, printing `PASS: all checks passed`. It writes `cpu_top_wb.vcd` in the repo root (the working directory).
 
-The waveform below was captured from `tb_cpu_top_wb.v`:
+Two waveforms are captured, one per SoC testbench.
 
-![Waveform Output](documentation/waveform.png)
+**MAC + DMA** ([`tb_cpu_top_wb_mac.v`](hardware/test_bench/tb_cpu_top_wb_mac.v), `make run`, writes `cpu_top_wb.vcd`):
+
+![MAC Waveform Output](documentation/media/waveform_mac.png)
+
+**SORT** ([`tb_cpu_top_wb_sort.v`](hardware/test_bench/tb_cpu_top_wb_sort.v), `make sort`, writes `sort_soc.vcd`): the CPU runs `program_sort.hex`, programs the sorter and sorts 8 words from `0x100` into `0x140`, printing `PASS: CPU-driven SORT integration test passed.`
+
+![SORT Waveform Output](documentation/media/waveform_sort.png)
 
 Refer to [Processor_Control_Signals](documentation/RV32I_Processor_Control_Signals.md) for explanation of what these signals mean.
 
@@ -288,7 +365,7 @@ All commands are run from the repository root.
 make run
 ```
 
-This builds the SoC with [`tb_cpu_top_wb.v`](hardware/test_bench/tb_cpu_top_wb.v), simulates it, and exits non-zero if any check fails (`vvp` itself always exits 0, so the Makefile scans the log for `FAIL`). A successful run ends with:
+This builds the SoC with [`tb_cpu_top_wb_mac.v`](hardware/test_bench/tb_cpu_top_wb_mac.v), simulates it, and exits non-zero if any check fails (`vvp` itself always exits 0, so the Makefile scans the log for `FAIL`). A successful run ends with:
 
 ```text
 VCD info: dumpfile cpu_top_wb.vcd opened for output.
@@ -307,7 +384,7 @@ To compile by hand instead:
 mkdir -p build
 iverilog -I hardware/src/bus -I hardware/test_bench -o build/cpu_tb.out \
   $(find hardware/src -name '*.v' ! -name 'wb_ram.v') \
-  hardware/test_bench/tb_cpu_top_wb.v && vvp build/cpu_tb.out
+  hardware/test_bench/tb_cpu_top_wb_mac.v && vvp build/cpu_tb.out
 ```
 
 </details>
@@ -316,9 +393,10 @@ iverilog -I hardware/src/bus -I hardware/test_bench -o build/cpu_tb.out \
 <summary><b>Makefile targets</b></summary>
 
 ```bash
-make run      # compile + simulate the SoC testbench, fail on any FAIL
+make run      # compile + simulate the MAC/DMA SoC testbench, fail on any FAIL
+make sort     # compile + simulate the SORT SoC testbench (loads program_sort.hex), fail on any FAIL
 make compile  # compile only, build/cpu_tb.out
-make bus      # run all five bus testbenches, stop at the first failure
+make bus      # run all six bus testbenches, stop at the first failure
 make clean    # remove build artifacts and *.vcd
 ```
 
@@ -327,7 +405,7 @@ make clean    # remove build artifacts and *.vcd
 <details>
 <summary><b>Bus testbenches</b></summary>
 
-`make bus` runs `tb_wb_ram` (35), `tb_wb_master` (32), `tb_wb_integ` (21), `tb_wb_mac_accel` (52) and `tb_wb_dma` (37) in turn; each prints its check count (`PASS: n FAIL: 0`, or `PASS: all checks passed (37)` for `tb_wb_dma`). To run one by hand (MAC accelerator shown; `-I hardware/src/bus` is needed by every bench that includes `wb_defs.vh`):
+`make bus` runs `tb_wb_ram` (35), `tb_wb_master` (32), `tb_wb_integ` (21), `tb_wb_mac_accel` (52), `tb_wb_dma` (37) and `tb_wb_sort` (103 tests) in turn; each prints its check count (`PASS: n FAIL: 0`, `PASS: all checks passed (37)` for `tb_wb_dma`, `Tests passed: 103 / 103` and `ALL TESTS PASSED` for `tb_wb_sort`). To run one by hand (MAC accelerator shown; `-I hardware/src/bus` is needed by every bench that includes `wb_defs.vh`):
 
 ```bash
 iverilog -I hardware/src/bus -o /tmp/tb_mac.out hardware/src/bus/wb_mac_accel.v hardware/test_bench/bus/tb_wb_mac_accel.v && vvp /tmp/tb_mac.out

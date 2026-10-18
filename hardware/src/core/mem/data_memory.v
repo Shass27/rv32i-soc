@@ -30,7 +30,7 @@
 //    reg [31:0] tohost;
 
 //    initial begin
-//        $readmemh("data.hex", memory);
+//        $readmemh("hardware/src/core/mem/data.hex", memory);
 //        tohost = 32'b0;
 //    end
 
@@ -177,7 +177,7 @@ module data_memory #(
     reg [31:0] tohost;
 
     initial begin
-        $readmemh("data.hex", memory);
+        $readmemh("hardware/src/core/mem/data.hex", memory);
         tohost = 32'b0;
     end
 

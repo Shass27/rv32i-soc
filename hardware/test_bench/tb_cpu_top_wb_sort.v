@@ -19,6 +19,9 @@ module tb_cpu_top_wb_sort;
 
     always #5 clk = ~clk;
 
+    // run the sort program (path relative to the vvp working dir = repo root)
+    defparam u_dut.u_imem.PROG_FILE = "program_sort.hex";
+
     // Actual SoC: CPU + interconnect + SORT + data memory + DMA.
     cpu_top_wb u_dut (
         .clk      (clk),

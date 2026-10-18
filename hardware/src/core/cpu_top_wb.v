@@ -1,6 +1,7 @@
 module cpu_top_wb (
     input wire clk,
-    input wire reset
+    input wire reset,
+    output wire [31:0] debug_pc
 );
 
     // =========================================================
@@ -64,8 +65,24 @@ module cpu_top_wb (
     wire [31:0] mem_rdata_local;
     wire [31:0] wb_data;
     // port B wires — declared here so data_memory instantiation can use them
+     // DMA and SORT share data_memory Port B
+    wire        dma_b_we;
+    wire [31:0] dma_b_addr, dma_b_wdat;
+
+    wire        sort_b_we;
+    wire [31:0] sort_b_addr, sort_b_wdat;
+
     wire        b_we;
     wire [31:0] b_addr, b_wdat, b_rdat;
+
+    // DMA has priority; SORT runs when DMA is idle
+    wire sort_mem_grant = ~dma_busy;
+
+    assign b_we   = dma_busy ? dma_b_we   : sort_b_we;
+    assign b_addr = dma_busy ? dma_b_addr : sort_b_addr;
+    assign b_wdat = dma_busy ? dma_b_wdat : sort_b_wdat;
+    wire [31:0] sort_b_rdat;
+    assign sort_b_rdat = b_rdat;
 
     // --- Muxed signals ---
     wire [31:0] target;         // final target for PC
@@ -228,8 +245,10 @@ module cpu_top_wb (
 
     // Slave -> interconnect
     wire        ram_cyc, ram_stb, mac_cyc, mac_stb, err_cyc, err_stb;
-    wire [31:0] mac_dat, err_dat;
+    wire        sort_cyc, sort_stb;                 
+    wire [31:0] mac_dat, err_dat, sort_dat;         
     wire        mac_ack, mac_err, err_ack, err_err;
+    wire        sort_ack, sort_err;                 
     wire        ic_ack, ic_err;
     wire [31:0] ic_dat;
     // DMA slave port (interconnect → wb_dma register page)
@@ -251,8 +270,8 @@ module cpu_top_wb (
         .o_m_we   (dma_we),    .o_m_adr  (dma_adr),
         .o_m_dat  (dma_dat),   .i_m_dat  (ic_dat),
         .i_m_ack  (dma_ack),   .i_m_err  (dma_err),
-        .o_b_we   (b_we),      .o_b_addr (b_addr),
-        .o_b_wdat (b_wdat),    .i_b_rdat (b_rdat),
+        .o_b_we   (dma_b_we),   .o_b_addr (dma_b_addr),
+        .o_b_wdat (dma_b_wdat), .i_b_rdat (b_rdat),
         .o_busy   (dma_busy)
     );
 
@@ -322,7 +341,13 @@ module cpu_top_wb (
         .o_dma_stb   (dma_s_stb),
         .i_dma_dat   (dma_s_rdat),
         .i_dma_ack   (dma_s_ack),
-        .i_dma_err   (1'b0)
+        .i_dma_err   (1'b0),
+      // Slave 4: SORT register page at 0x3000_xxxx
+        .o_sort_cyc   (sort_cyc),       // NEW
+        .o_sort_stb   (sort_stb),       // NEW
+        .i_sort_dat   (sort_dat),       // NEW
+        .i_sort_ack   (sort_ack),       // NEW
+        .i_sort_err   (sort_err)        // NEW
     );
 
     wb_mac_accel u_mac (
@@ -364,5 +389,24 @@ module cpu_top_wb (
         .jump_ret_addr (jump_ret_addr),
         .wb_data       (wb_data)
     );
+   
 
+    wb_sort u_sort (
+    .i_wb_clk(clk),
+    .i_wb_rst(reset),
+    .i_wb_adr(m_adr),
+    .i_wb_dat(m_dat),
+    .i_wb_we(m_we),
+    .i_wb_stb(sort_stb),
+    .i_wb_cyc(sort_cyc),
+    .o_wb_dat(sort_dat),
+    .o_wb_ack(sort_ack),
+    .o_wb_err(sort_err),
+    .o_mem_we(sort_b_we),
+    .o_mem_addr(sort_b_addr),
+    .o_mem_wdata(sort_b_wdat),
+    .i_mem_rdata(sort_b_rdat),
+    .i_mem_grant(sort_mem_grant)
+);
+assign debug_pc = pc;
 endmodule

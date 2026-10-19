@@ -290,6 +290,12 @@ module cpu_top_wb #(
     wire        dma_s_cyc, dma_s_stb, dma_s_ack;
     wire [31:0] dma_s_rdat;
 
+
+    wire        search_cyc, search_stb;
+wire [31:0] search_dat;
+wire        search_ack, search_err;
+
+
     // One request pulse per IO instruction; never while the DMA owns the bus
     assign wb_req = io_sel & ~wb_busy & ~wb_done & ~dma_busy;
     // done pulse always releases, so the START store advances even though dma_busy rose on the same edge
@@ -378,6 +384,11 @@ module cpu_top_wb #(
         .i_dma_dat   (dma_s_rdat),
         .i_dma_ack   (dma_s_ack),
         .i_dma_err   (1'b0),
+        .o_search_cyc (search_cyc),
+        .o_search_stb (search_stb),
+        .i_search_dat (search_dat),
+        .i_search_ack (search_ack),
+        .i_search_err (search_err)
       // Slave 4: SORT register page at 0x3000_xxxx
         .o_sort_cyc   (sort_cyc),       // NEW
         .o_sort_stb   (sort_stb),       // NEW
@@ -419,6 +430,20 @@ module cpu_top_wb #(
         .o_wb_ack (err_ack),
         .o_wb_err (err_err)
     );
+    wb_search_accel u_search (
+    .i_wb_clk (clk),
+    .i_wb_rst (reset),
+
+    .i_wb_adr (m_adr),
+    .i_wb_dat (m_dat),
+    .i_wb_we  (m_we),
+    .i_wb_stb (search_stb),
+    .i_wb_cyc (search_cyc),
+
+    .o_wb_dat (search_dat),
+    .o_wb_ack (search_ack),
+    .o_wb_err (search_err)
+);
 
     // =========================================================
     //  WB STAGE

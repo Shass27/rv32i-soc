@@ -1,59 +1,68 @@
-// wb_interconnect.v — Wishbone Classic address decoder + response mux
-// One master, four slaves: wb_ram / wb_mac_accel / wb_dma / wb_err (catch-all)
-//
-// Address map (from wb_defs.vh):
-//   0x0000_0000 – 0x0000_03FF   wb_ram       (1 KB)
-//   0x1000_0000 – 0x1000_FFFF   wb_mac_accel (64 KB)
-//   0x2000_0000 – 0x2000_FFFF   wb_dma       (register page, aliased every 32 B)
-//   everything else              wb_err       (catch-all → ERR)
-//
-// WE / ADR / DAT (master→slave) are broadcast to all slaves.
-// Only the selected slave receives CYC & STB, so only it will drive ACK/ERR.
 
 `include "wb_defs.vh"
+
+// Wishbone address decoder and response mux
+// Supports RAM, MAC, DMA, SEARCH, and ERR slaves.
 
 module wb_interconnect #(
     parameter DATA_WIDTH = 32
 )(
-    // ── Master-facing interface ──────────────────────────────────────────────
+    // Master interface
     input  wire                  i_wb_cyc,
     input  wire                  i_wb_stb,
     input  wire                  i_wb_we,
     input  wire [31:0]           i_wb_adr,
-    input  wire [DATA_WIDTH-1:0] i_wb_dat_ms,  // master → slave write data
+    input  wire [DATA_WIDTH-1:0] i_wb_dat_ms,
 
-    output wire [DATA_WIDTH-1:0] o_wb_dat_sm,  // slave  → master read data
+    output wire [DATA_WIDTH-1:0] o_wb_dat_sm,
     output wire                  o_wb_ack,
     output wire                  o_wb_err,
 
-    // ── Slave 0: wb_ram ──────────────────────────────────────────────────────
+    // Slave 0: RAM
     output wire                  o_ram_cyc,
     output wire                  o_ram_stb,
-    // WE / ADR / DAT_MS wired directly to slave in parent
     input  wire [DATA_WIDTH-1:0] i_ram_dat,
     input  wire                  i_ram_ack,
-    // wb_ram has no ERR port (pre-ERR design)
 
-    // ── Slave 1: wb_mac_accel ────────────────────────────────────────────────
+    // Slave 1: MAC
     output wire                  o_mac_cyc,
     output wire                  o_mac_stb,
     input  wire [DATA_WIDTH-1:0] i_mac_dat,
     input  wire                  i_mac_ack,
     input  wire                  i_mac_err,
 
-    // ── Slave 2: wb_err (catch-all) ──────────────────────────────────────────
+    // Slave 2: ERR
     output wire                  o_err_cyc,
     output wire                  o_err_stb,
     input  wire [DATA_WIDTH-1:0] i_err_dat,
-    input  wire                  i_err_ack,   // always 0 from wb_err
-    input  wire                  i_err_err,   // always 1 on access from wb_err
+    input  wire                  i_err_ack,
+    input  wire                  i_err_err,
 
-    // ── Slave 3: wb_dma register page ────────────────────────────────────────
+    // Slave 3: DMA
     output wire                  o_dma_cyc,
     output wire                  o_dma_stb,
     input  wire [DATA_WIDTH-1:0] i_dma_dat,
     input  wire                  i_dma_ack,
     input  wire                  i_dma_err,
+
+    // Slave 4: SEARCH
+    output wire                  o_search_cyc,
+    output wire                  o_search_stb,
+    input  wire [DATA_WIDTH-1:0] i_search_dat,
+    input  wire                  i_search_ack,
+    input  wire                  i_search_err
+);
+
+    // Address decoding
+    wire sel_ram    = (i_wb_adr[31:10] == 22'd0);
+    wire sel_mac    = (i_wb_adr[31:16] == 16'h1000);
+    wire sel_dma    = (i_wb_adr[31:16] == 16'h2000);
+    wire sel_search = (i_wb_adr[31:16] == 16'h3000);
+
+    // Any address not assigned above selects the error slave.
+    wire sel_err = ~(sel_ram | sel_mac | sel_dma | sel_search);
+
+    // Route the master's CYC and STB to the selected slave.
         // ── Slave 4: wb_sort register page ──────────────────────────────────────
     output wire                  o_sort_cyc,       // NEW
     output wire                  o_sort_stb,       // NEW
@@ -85,9 +94,33 @@ wire sel_err  = ~sel_ram & ~sel_mac & ~sel_dma & ~sel_sort;
     assign o_sort_cyc = i_wb_cyc & sel_sort;  
     assign o_sort_stb = i_wb_stb & sel_sort;  
 
+    assign o_search_cyc = i_wb_cyc & sel_search;
+    assign o_search_stb = i_wb_stb & sel_search;
+
     assign o_err_cyc = i_wb_cyc & sel_err;
     assign o_err_stb = i_wb_stb & sel_err;
 
+    // Return ACK from the selected slave.
+    assign o_wb_ack =
+        (sel_ram    & i_ram_ack)    |
+        (sel_mac    & i_mac_ack)    |
+        (sel_dma    & i_dma_ack)    |
+        (sel_search & i_search_ack);
+
+    // Return ERR from the selected slave.
+    assign o_wb_err =
+        (sel_mac    & i_mac_err)    |
+        (sel_dma    & i_dma_err)    |
+        (sel_search & i_search_err) |
+        (sel_err    & i_err_err);
+
+    // Return read data from the selected slave.
+    assign o_wb_dat_sm =
+        sel_ram    ? i_ram_dat    :
+        sel_mac    ? i_mac_dat    :
+        sel_dma    ? i_dma_dat    :
+        sel_search ? i_search_dat :
+                     i_err_dat;
     // ── Response mux (only one sel_* is high per cycle) ──────────────────────
     assign o_wb_ack = (sel_ram  ? i_ram_ack  : 1'b0)
                 | (sel_mac  ? i_mac_ack  : 1'b0)

@@ -1,4 +1,14 @@
-module cpu_top_wb (
+module cpu_top_wb #(
+    // Matrix scratch window (matrix_mem). Size = 32*MAT_K_MAX bytes (8 KB for 256).
+    // MAT_BASE must be aligned to that size and must not overlap local data_memory
+    // (0x0000_0000-0x0000_FFFF) or any Wishbone slave page (0x1000_xxxx..0x3000_xxxx).
+    // MAT_K_MAX must be a power of two. MAT_MEM_LAT / MAT_MULT_PIPE are passed to both
+    // matrix_mem and wb_mac_accel (MAT_MEM_LAT must match on both sides).
+    parameter [31:0] MAT_BASE      = 32'h4000_0000,
+    parameter        MAT_K_MAX     = 256,
+    parameter        MAT_MEM_LAT   = 0,
+    parameter        MAT_MULT_PIPE = 0
+)(
     input wire clk,
     input wire reset,
     output wire [31:0] debug_pc
@@ -207,13 +217,22 @@ module cpu_top_wb (
     // =========================================================
     //  MEM STAGE
     // =========================================================
-    // Bottom 64 KB is local data_memory; everything above goes out on Wishbone
-    wire        io_sel = (MemRead | MemWrite) & (ALU_result[31:16] != 16'h0000);
+    // Bottom 64 KB is local data_memory; the matrix window (matrix_mem) is a
+    // single-cycle, write-only 32-bit-store target; everything else above 64 KB
+    // goes out on Wishbone.
+    localparam MAT_WIN_BITS = $clog2(MAT_K_MAX) + 5;   // window size = 2**MAT_WIN_BITS bytes
+
+    wire        mat_sel = (MemRead | MemWrite) &
+                          (ALU_result[31:MAT_WIN_BITS] == MAT_BASE[31:MAT_WIN_BITS]);
+    // sw only; SB/SH to the window are ignored. Held off while the DMA freezes the CPU,
+    // so a frozen store executes once, after the DMA releases it.
+    wire        mat_we  = MemWrite & mat_sel & (funct3 == 3'b010) & ~dma_busy;
+    wire        io_sel  = (MemRead | MemWrite) & (ALU_result[31:16] != 16'h0000) & ~mat_sel;
 
     data_memory u_mem (
         .clk       (clk),
-        .MemRead   (MemRead  & ~io_sel),
-        .MemWrite  (MemWrite & ~io_sel & ~dma_busy),   // a frozen SW must not collide with DMA port B
+        .MemRead   (MemRead  & ~io_sel & ~mat_sel),
+        .MemWrite  (MemWrite & ~io_sel & ~mat_sel & ~dma_busy),   // a frozen SW must not collide with DMA port B
         .mem_addr  (ALU_result),
         .rs2_data  (rs2_data),
         .funct3    (funct3),
@@ -223,6 +242,22 @@ module cpu_top_wb (
         .i_b_addr  (b_addr),
         .i_b_wdat  (b_wdat),
         .o_b_rdat  (b_rdat)
+    );
+
+    // Matrix scratch memory: CPU writes via mat_we, accelerator reads a 256-bit tile per cycle
+    wire [255:0] mat_tile;
+    wire [31:0]  mat_tile_addr;
+
+    matrix_mem #(
+        .K_MAX   (MAT_K_MAX),
+        .MEM_LAT (MAT_MEM_LAT)
+    ) u_matmem (
+        .clk       (clk),
+        .we        (mat_we),
+        .waddr     (ALU_result),
+        .wdata     (rs2_data),
+        .tile_addr (mat_tile_addr),
+        .tile      (mat_tile)
     );
 
     // =========================================================
@@ -287,7 +322,8 @@ module cpu_top_wb (
     assign dma_ack = ic_ack &  dma_busy;
     assign dma_err = ic_err &  dma_busy;
 
-    assign mem_rdata = io_sel ? wb_rdat : mem_rdata_local;
+    // Matrix window is write-only: a load from it returns 0 rather than aliasing data_memory
+    assign mem_rdata = io_sel ? wb_rdat : mat_sel ? 32'b0 : mem_rdata_local;
 
     wb_master u_wb_master (
         .i_clk    (clk),
@@ -350,7 +386,11 @@ module cpu_top_wb (
         .i_sort_err   (sort_err)        // NEW
     );
 
-    wb_mac_accel u_mac (
+    wb_mac_accel #(
+        .K_MAX     (MAT_K_MAX),
+        .MEM_LAT   (MAT_MEM_LAT),
+        .MULT_PIPE (MAT_MULT_PIPE)
+    ) u_mac (
         .i_wb_clk (clk),
         .i_wb_rst (reset),
         .i_wb_adr (m_adr),
@@ -361,7 +401,10 @@ module cpu_top_wb (
         .o_wb_dat (mac_dat),
         .o_wb_ack (mac_ack),
         .o_wb_err (mac_err),
-        .o_irq    ()
+        .o_irq    (),
+        // tile port to matrix_mem
+        .o_mem_tile_addr (mat_tile_addr),
+        .i_mem_tile      (mat_tile)
     );
 
     wb_err u_wb_err (

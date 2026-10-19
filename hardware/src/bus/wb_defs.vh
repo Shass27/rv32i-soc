@@ -5,6 +5,7 @@
 //   0x00xx_xxxx   Data RAM        (256 words, 1 KB)
 //   0x10xx_xxxx   MAC Accelerator (64 KB slot)
 //   0x2000_xxxx   DMA Controller  (64 KB slot, register page aliased every 32 B)
+//   0x3000_xxxx   Sort Accelerator (64 KB slot, registers on adr[5:2])
 //   0xFFxx_xxxx   Error slave     (catch-all for unmapped addresses)
 
 // ── Data RAM (wb_ram) ────────────────────────────────────────────────────────
@@ -45,6 +46,15 @@
 `define WB_DMA_LEN      32'h2000_0008
 `define WB_DMA_CTRL     32'h2000_000C
 `define WB_DMA_STATUS   32'h2000_0010
+
+// ── Sort Accelerator (wb_sort) ──────────────────────────────────────────────
+`define WB_SORT_BASE    32'h3000_0000
+`define WB_SORT_END     32'h3000_FFFF   // 64 KB slot; registers decoded on adr[5:2]
+`define WB_SORT_SRC     32'h3000_0000
+`define WB_SORT_DST     32'h3000_0004
+`define WB_SORT_LEN     32'h3000_0008
+`define WB_SORT_CTRL    32'h3000_000C
+`define WB_SORT_STATUS  32'h3000_0010
 
 // ── Error slave (wb_err) — catch-all ────────────────────────────────────────
 `define WB_ERR_BASE     32'hFFFF_0000

@@ -1,6 +1,6 @@
 // dma_driver.vh — DMA-based driver for the MAC accelerator (dot product).
 // Replaces mac_driver.vh: uses the DMA controller to copy vectors into MAC buffers
-// instead of a CPU SW loop. Include inside tb_cpu_top_wb after rv32i_asm.vh.
+// instead of a CPU SW loop. Include inside tb_cpu_top_wb_mac after rv32i_asm.vh.
 //
 // Computes  dot(A, B) = 1*5 + 2*6 + 3*7 + 4*8 = 70
 //   A[0..3] @ 0x200, B[0..3] @ 0x220   (local data_memory)

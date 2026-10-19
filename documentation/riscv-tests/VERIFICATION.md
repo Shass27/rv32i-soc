@@ -148,7 +148,7 @@ the `slli.S` sequence.
 
 
 
-Testbench: `tb_cpu_top` (`lw.vcd`), a local run; the committed SoC bench is `tb_cpu_top_wb.v`. The effective address is computed as
+Testbench: `tb_cpu_top` (`lw.vcd`), a local run; the committed SoC bench is `tb_cpu_top_wb_mac.v`. The effective address is computed as
 `rs1_data + imm` through the ALU (`ALUOp = 2`, base+offset addressing),
 `MemRead` is asserted, and the returned `mem_rdata` is routed to
 `wb_data` for register write-back. `pc` and `jump_ret_addr` progress in

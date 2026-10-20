@@ -16,7 +16,7 @@ module tb_wb_search_accel;
     wire        wb_ack;
     wire        wb_err;
 
-    localparam [31:0] BASE   = 32'h30000000;
+    localparam [31:0] BASE   = 32'h50000000;
     localparam [31:0] CTRL   = BASE + 32'h8000;
     localparam [31:0] STATUS = BASE + 32'h8004;
     localparam [31:0] LEN    = BASE + 32'h8008;

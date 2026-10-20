@@ -388,7 +388,7 @@ wire        search_ack, search_err;
         .o_search_stb (search_stb),
         .i_search_dat (search_dat),
         .i_search_ack (search_ack),
-        .i_search_err (search_err)
+        .i_search_err (search_err),
       // Slave 4: SORT register page at 0x3000_xxxx
         .o_sort_cyc   (sort_cyc),       // NEW
         .o_sort_stb   (sort_stb),       // NEW

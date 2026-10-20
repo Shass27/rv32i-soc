@@ -11,8 +11,10 @@ module tb_wb_dma;
 
     localparam DMA      = 32'h2000_0000;
     localparam R_SRC    = 32'h00, R_DST = 32'h04, R_LEN = 32'h08, R_CTRL = 32'h0C, R_STATUS = 32'h10;
-    localparam BUF_A    = `WB_MAC_BASE;
-    localparam BUF_B    = `WB_MAC_BASE + 32'h4000;
+    localparam RES      = `WB_MAC_BASE;            // MAC result window (read-only slave words)
+    localparam M_K      = `WB_MAC_K;
+    localparam M_CTRL   = `WB_MAC_CTRL;
+    localparam M_DBASE  = `WB_MAC_DATA_BASE;
 
     // ----------------------------------------------------------------
     // Signals
@@ -70,13 +72,18 @@ module tb_wb_dma;
         .i_err_ack (err_ack), .i_err_err (err_err)
     );
 
+    // constant tile: A column = 1..4, B row = 5..8, so K=1 gives C[r][c] = (r+1)*(5+c)
+    wire [255:0] tile = {32'd8, 32'd7, 32'd6, 32'd5, 32'd4, 32'd3, 32'd2, 32'd1};
+
     wb_mac_accel u_mac (
         .i_wb_clk (clk), .i_wb_rst (rst),
         .i_wb_adr (o_m_adr), .i_wb_dat (o_m_dat), .i_wb_we (o_m_we),
         .i_wb_stb (mac_stb), .i_wb_cyc (mac_cyc),
         .o_wb_dat (mac_dat), .o_wb_ack (mac_ack), .o_wb_err (mac_err),
-        .o_irq    ()
+        .o_irq    (),
+        .o_mem_tile_addr (), .i_mem_tile (tile)
     );
+
 
     wb_err u_err (
         .i_wb_clk (clk), .i_wb_rst (rst),
@@ -180,39 +187,50 @@ module tb_wb_dma;
         i_s_adr = 0; i_s_dat = 0; i_s_we = 0; i_s_stb = 0; i_s_cyc = 0;
         for (i = 0; i < 256; i = i + 1) lmem[i] = 0;
         for (i = 0; i < 4; i = i + 1)   lmem[32'h100/4 + i] = i + 1;   // source vector 1,2,3,4 @ 0x100
+        lmem[32'h100/4] = 1;                // -> K
+        lmem[32'h104/4] = 1;                // -> CTRL.START
+        lmem[32'h108/4] = 32'h1234_5660;    // -> DATA_BASE (low 5 bits already 0)
+        lmem[32'h10C/4] = 32'h0000_A0A0;    // -> DATA_BASE (busy-write test)
 
         rst = 1;
         repeat (2) @(posedge clk);
         #1 rst = 0;
 
-        // --- 1. mem -> BUF_A (the MAC use case) ---
-        run(32'h100, BUF_A, 4, n);
-        for (i = 0; i < 4; i = i + 1) check(u_mac.buf_a[i], i + 1, "mem->BUF_A data");
-        $display("INFO: mem->MAC took %0d cycles for 4 words (%0d/word)", n, n / 4);
-        check(n, 16, "mem->BUF_A 4 cycles/word");
+        // --- 1. mem -> bus slave regs: DMA programs the MAC (K=1, START) ---
+        run(32'h100, M_K, 1, n);
+        check(u_mac.k_cfg, 1, "mem->K data");
+        check(n, 4, "mem->bus 4 cycles/word");
         reg_rd(R_STATUS, rd); check(rd, 32'b010, "STATUS after copy = DONE");
         reg_rd(R_LEN, rd);    check(rd, 0, "LEN live counter ends at 0");
-        reg_rd(R_SRC, rd);    check(rd, 32'h110, "SRC live counter +16");
-        reg_rd(R_DST, rd);    check(rd, BUF_A + 16, "DST live counter +16");
+        reg_rd(R_SRC, rd);    check(rd, 32'h104, "SRC live counter +4");
+        reg_rd(R_DST, rd);    check(rd, M_K + 4, "DST live counter +4");
+        run(32'h104, M_CTRL, 1, n);
+        while (!u_mac.done) @(posedge clk);
+        #1;
+        check(u_mac.c_acc[0], 5, "MAC C[0][0] = 1*5");
+        check(u_mac.c_acc[15], 32, "MAC C[3][3] = 4*8");
 
         // --- 2. DONE is write-1-to-clear ---
         reg_wr(R_STATUS, 32'b010);
         reg_rd(R_STATUS, rd); check(rd, 0, "DONE W1C");
 
-        // --- 3. BUF_A -> mem ---
-        run(BUF_A, 32'h200, 4, n);
-        for (i = 0; i < 4; i = i + 1) check(lmem[32'h200/4 + i], i + 1, "BUF_A->mem data");
-        check(n, 16, "BUF_A->mem 4 cycles/word");
+        // --- 3. bus (MAC results) -> mem: C00 lo/hi, C01 lo/hi ---
+        run(RES, 32'h200, 4, n);
+        check(lmem[32'h200/4],     5, "RES->mem C00 lo");
+        check(lmem[32'h200/4 + 1], 0, "RES->mem C00 hi");
+        check(lmem[32'h200/4 + 2], 6, "RES->mem C01 lo");
+        check(lmem[32'h200/4 + 3], 0, "RES->mem C01 hi");
+        check(n, 16, "bus->mem 4 cycles/word");
 
         // --- 4. mem -> mem ---
         run(32'h100, 32'h300, 4, n);
-        for (i = 0; i < 4; i = i + 1) check(lmem[32'h300/4 + i], i + 1, "mem->mem data");
+        for (i = 0; i < 4; i = i + 1) check(lmem[32'h300/4 + i], (i == 0) ? 1 : (i == 1) ? 1 : (i == 2) ? 32'h1234_5660 : 32'hA0A0, "mem->mem data");
         check(n, 8, "mem->mem 2 cycles/word");
 
-        // --- 5. BUF_A -> BUF_B (bus -> bus) ---
-        run(BUF_A, BUF_B, 4, n);
-        for (i = 0; i < 4; i = i + 1) check(u_mac.buf_b[i], i + 1, "BUF_A->BUF_B data");
-        check(n, 24, "bus->bus 6 cycles/word");
+        // --- 5. bus -> bus: C01 lo (6) -> K register ---
+        run(RES + 32'd8, M_K, 1, n);
+        check(u_mac.k_cfg, 6, "RES->K data");
+        check(n, 6, "bus->bus 6 cycles/word");
 
         // --- 6. LEN = 0: START ignored ---
         reg_wr(R_LEN, 0);
@@ -220,21 +238,20 @@ module tb_wb_dma;
         check(o_busy, 0, "LEN=0 START ignored");
 
         // --- 7. register writes ignored while BUSY ---
-        for (i = 0; i < 4; i = i + 1) lmem[32'h100/4 + i] = 32'hA0 + i;
-        reg_wr(R_SRC, 32'h100);
-        reg_wr(R_DST, BUF_A);
-        reg_wr(R_LEN, 4);
+        reg_wr(R_SRC, 32'h10C);
+        reg_wr(R_DST, M_DBASE);
+        reg_wr(R_LEN, 1);
         reg_wr(R_CTRL, 1);
         reg_wr(R_LEN, 99);                              // all land while BUSY
         reg_wr(R_SRC, 32'h0);
         reg_wr(R_CTRL, 1);
         while (o_busy) @(posedge clk);
         #1;
-        for (i = 0; i < 4; i = i + 1) check(u_mac.buf_a[i], 32'hA0 + i, "busy-write ignored: data");
+        check(u_mac.data_base, 32'hA0A0, "busy-write ignored: data");
         reg_rd(R_LEN, rd); check(rd, 0, "busy-write ignored: LEN");
 
         // --- 8. bus error: DST in unmapped space ---
-        run(32'h100, 32'h4000_0000, 4, n);
+        run(32'h100, 32'h4000_0000, 4, n);   // unmapped on the bus (matrix window is CPU-only)
         reg_rd(R_STATUS, rd); check(rd, 32'b110, "ERR + DONE on unmapped DST");
         reg_rd(R_LEN, rd);    check(rd, 4, "ERR stops before advancing");
         reg_wr(R_STATUS, 32'b100);

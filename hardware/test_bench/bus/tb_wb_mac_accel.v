@@ -1,270 +1,162 @@
-// tb_wb_mac_accel.v — unit testbench for wb_mac_accel (bare Wishbone slave drive)
-// verifies: reset, bus guards, BUF_A/BUF_B memory, control registers,
-//           signed MAC engine, BUSY/DONE handshake, IRQ
-//
-// Engine timing: START written at posedge N -> RUN for LEN edges -> FIN at N+LEN+1,
-// so DONE appears LEN+2 posedges after the START write. The TB polls STATUS instead.
-
+// Self-checking bench for wb_mac_accel.v (4x4 systolic matrix MAC, 256-bit tile port)
+// Icarus:  iverilog -g2012 -s tb_wb_mac_accel -o sim tb_wb_mac_accel.v ../../src/bus/wb_mac_accel.v && vvp sim
+//          (add -Ptb_wb_mac_accel.MEM_LAT=1 -Ptb_wb_mac_accel.MULT_PIPE=1 to test the other options)
 `timescale 1ns/1ps
-`include "wb_defs.vh"
-
 module tb_wb_mac_accel;
+    parameter MEM_LAT   = 0;
+    parameter MULT_PIPE = 0;
+    localparam [31:0] BASE = 32'h0000_4000;
+    localparam [31:0] P    = 32'h1000_0000;
 
-    // ----------------------------------------------------------------
-    // DUT signals
-    // ----------------------------------------------------------------
-    reg         i_wb_clk = 0;
-    reg         i_wb_rst;
-    reg  [31:0] i_wb_adr;
-    reg  [31:0] i_wb_dat;
-    reg         i_wb_we;
-    reg         i_wb_stb;
-    reg         i_wb_cyc;
-    wire [31:0] o_wb_dat;
-    wire        o_wb_ack;
-    wire        o_wb_err;
-    wire        o_irq;
+    reg clk = 0, rst = 1;
+    always #5 clk = ~clk;
 
-    wb_mac_accel #(
-        .ADDR_WIDTH(16), .DATA_WIDTH(32), .BUF_AW(12)
-    ) dut (
-        .i_wb_clk(i_wb_clk), .i_wb_rst(i_wb_rst),
-        .i_wb_adr(i_wb_adr), .i_wb_dat(i_wb_dat),
-        .i_wb_we (i_wb_we),  .i_wb_stb(i_wb_stb),
-        .i_wb_cyc(i_wb_cyc),
-        .o_wb_dat(o_wb_dat), .o_wb_ack(o_wb_ack), .o_wb_err(o_wb_err),
-        .o_irq   (o_irq)
-    );
+    reg  [31:0] adr = 0, dat = 0;
+    reg         we = 0, stb = 0, cyc = 0;
+    wire [31:0] rdat;
+    wire        ack, err, irq;
+    wire [31:0] mem_addr;
+    wire [255:0] tile;
 
-    always #5 i_wb_clk = ~i_wb_clk; // 10 ns period
+    reg [255:0] mem [0:255];
+    wire [31:0] idx = (mem_addr - BASE) >> 5;
 
-    // ----------------------------------------------------------------
-    // Waveform dump — explicit order: clk, rst | inputs | outputs | internals
-    // buf_a/buf_b arrays are not dumped by iverilog; mul_a/mul_b/product
-    // expose the buffer contents the engine is consuming each cycle
-    // ----------------------------------------------------------------
-    initial begin
-        $dumpfile("tb_wb_mac_accel.vcd");
-        $dumpvars(0, i_wb_clk, i_wb_rst,
-                     i_wb_adr, i_wb_dat, i_wb_we, i_wb_stb, i_wb_cyc,
-                     o_wb_dat, o_wb_ack, o_wb_err, o_irq,
-                     dut.state, dut.busy, dut.done, dut.len, dut.idx, dut.acc,
-                     dut.sel_a, dut.sel_b, dut.sel_regs,
-                     dut.reg_idx, dut.bus_word,
-                     dut.eng_word, dut.mul_a, dut.mul_b, dut.product);
+    generate
+        if (MEM_LAT == 0) begin : G_ASYNC
+            assign tile = (idx < 256) ? mem[idx] : {256{1'bx}};
+        end else begin : G_SYNC
+            reg [255:0] tile_r;
+            always @(posedge clk) tile_r <= (idx < 256) ? mem[idx] : {256{1'bx}};
+            assign tile = tile_r;
+        end
+    endgenerate
+
+    wb_mac_accel #(.K_MAX(256), .MEM_LAT(MEM_LAT), .MULT_PIPE(MULT_PIPE)) dut (
+        .i_wb_clk(clk), .i_wb_rst(rst),
+        .i_wb_adr(adr), .i_wb_dat(dat), .i_wb_we(we), .i_wb_stb(stb), .i_wb_cyc(cyc),
+        .o_wb_dat(rdat), .o_wb_ack(ack), .o_wb_err(err), .o_irq(irq),
+        .o_mem_tile_addr(mem_addr), .i_mem_tile(tile));
+
+    task wb_write(input [15:0] off, input [31:0] d);
+        begin
+            @(negedge clk); adr = P | off; dat = d; we = 1; stb = 1; cyc = 1;
+            @(negedge clk); we = 0; stb = 0; cyc = 0;
+        end
+    endtask
+
+    task wb_read(input [15:0] off, output [31:0] d);
+        begin
+            @(negedge clk); adr = P | off; we = 0; stb = 1; cyc = 1;
+            #1 d = rdat;
+            @(negedge clk); stb = 0; cyc = 0;
+        end
+    endtask
+
+    integer run_cycles, errors, tests;
+    reg [31:0] max_addr;
+    always @(posedge clk) begin
+        if (dut.state == 2'd2) begin
+            run_cycles = run_cycles + 1;
+            if (mem_addr > max_addr) max_addr = mem_addr;
+        end
     end
 
-    // ----------------------------------------------------------------
-    // Helpers
-    // ----------------------------------------------------------------
-    integer pass = 0, fail = 0;
-    reg [31:0] rd_tmp;   // scratch for polled reads
-    integer    poll_n;
+    reg signed [31:0] Am [0:4*256-1];
+    reg signed [31:0] Bm [0:4*256-1];
 
-    task check; // one-line assertion helper
-        input [63:0]  got;
-        input [63:0]  exp;
-        input [255:0] tag;
+    task run_test(input integer K, input integer mode);
+        integer r, c, k;
+        reg signed [63:0] ref_c, p;
+        reg [31:0] lo, hi, st;
+        reg signed [31:0] v;
         begin
-            if (got === exp) begin $display("PASS  %0s", tag); pass = pass + 1; end
-            else             begin $display("FAIL  %0s  exp=%0h  got=%0h", tag, exp, got); fail = fail + 1; end
-        end
-    endtask
-
-    task bus_idle; // drive bus to idle state
-        begin i_wb_stb = 0; i_wb_cyc = 0; i_wb_we = 0; end
-    endtask
-
-    task wb_write; // synchronous write — one cycle, no checks
-        input [31:0] addr;
-        input [31:0] data;
-        begin
-            @(negedge i_wb_clk);
-            i_wb_adr = addr; i_wb_dat = data;
-            i_wb_we = 1; i_wb_stb = 1; i_wb_cyc = 1;
-            @(posedge i_wb_clk); #1;
-            @(negedge i_wb_clk);
-            bus_idle();
-        end
-    endtask
-
-    task wb_write_chk; // same as wb_write but also checks ACK/ERR during the write
-        input [31:0]  addr;
-        input [31:0]  data;
-        input [255:0] tag;
-        begin
-            @(negedge i_wb_clk);
-            i_wb_adr = addr; i_wb_dat = data;
-            i_wb_we = 1; i_wb_stb = 1; i_wb_cyc = 1;
-            @(posedge i_wb_clk); #1;
-            check({o_wb_err, o_wb_ack}, 2'b01, tag);   // ACK=1, ERR=0 in the write cycle
-            @(negedge i_wb_clk);
-            bus_idle();
-        end
-    endtask
-
-    task wb_read; // combinational read — checks ACK + data in the same cycle
-        input  [31:0]  addr;
-        input  [31:0]  exp_data;
-        input  [255:0] tag;
-        begin
-            @(negedge i_wb_clk);
-            i_wb_adr = addr; i_wb_dat = 0;
-            i_wb_we = 0; i_wb_stb = 1; i_wb_cyc = 1;
-            #1;
-            check(o_wb_dat, exp_data, tag);
-            @(negedge i_wb_clk);
-            bus_idle();
-        end
-    endtask
-
-    task wait_done; // poll STATUS until DONE (bit 1) sets, with timeout
-        input [255:0] tag;
-        begin
-            rd_tmp = 0; poll_n = 0;
-            while (!rd_tmp[`WB_MAC_DONE] && poll_n < 5000) begin
-                @(negedge i_wb_clk);
-                i_wb_adr = `WB_MAC_STATUS; i_wb_we = 0; i_wb_stb = 1; i_wb_cyc = 1;
-                #1; rd_tmp = o_wb_dat;
-                poll_n = poll_n + 1;
+            for (k = 0; k < K; k = k + 1) begin
+                for (r = 0; r < 4; r = r + 1) begin
+                    case (mode)
+                        0: v = $random;
+                        1: v = (($random & 3) == 0) ? 32'sh8000_0000 :
+                               (($random & 1) ? 32'sh7FFF_FFFF : -1);
+                        default: v = ($random % 11) - 5;
+                    endcase
+                    Am[r*256+k] = v;
+                    mem[k][32*r +: 32] = v;
+                end
+                for (c = 0; c < 4; c = c + 1) begin
+                    case (mode)
+                        0: v = $random;
+                        1: v = (($random & 3) == 0) ? 32'sh8000_0000 :
+                               (($random & 1) ? 32'sh7FFF_FFFF : -1);
+                        default: v = ($random % 11) - 5;
+                    endcase
+                    Bm[k*4+c] = v;
+                    mem[k][128 + 32*c +: 32] = v;
+                end
             end
-            @(negedge i_wb_clk); bus_idle();
-            check(rd_tmp[`WB_MAC_DONE], 1, tag);
+            wb_write(16'h8000, BASE);
+            wb_write(16'h8004, K);
+            run_cycles = 0; max_addr = 0;
+            wb_write(16'h8008, 32'h1);
+            st = 0;
+            while (!st[1]) wb_read(16'h800C, st);
+            for (r = 0; r < 4; r = r + 1)
+                for (c = 0; c < 4; c = c + 1) begin
+                    ref_c = 0;
+                    for (k = 0; k < K; k = k + 1) begin
+                        p = Am[r*256+k] * Bm[k*4+c];
+                        ref_c = ref_c + p;
+                    end
+                    wb_read((r*4+c)*8,     lo);
+                    wb_read((r*4+c)*8 + 4, hi);
+                    if ({hi, lo} !== ref_c) begin
+                        errors = errors + 1;
+                        $display("MISMATCH K=%0d mode=%0d C[%0d][%0d] got %h exp %h",
+                                 K, mode, r, c, {hi, lo}, ref_c);
+                    end
+                end
+            if (run_cycles != K + 6 + MEM_LAT + MULT_PIPE) begin
+                errors = errors + 1;
+                $display("LATENCY K=%0d: %0d RUN cycles, expected %0d",
+                         K, run_cycles, K + 6 + MEM_LAT + MULT_PIPE);
+            end
+            if (max_addr != BASE + 32*(K-1)) begin
+                errors = errors + 1;
+                $display("ADDR K=%0d: max addr %h, expected %h", K, max_addr, BASE + 32*(K-1));
+            end
+            wb_write(16'h800C, 32'h2);     // clear DONE
+            tests = tests + 1;
         end
     endtask
 
-    task clear_done; // write 1 to STATUS[DONE]
-        begin wb_write(`WB_MAC_STATUS, 32'h2); end
-    endtask
-
-    // ----------------------------------------------------------------
-    // Stimulus
-    // ----------------------------------------------------------------
+    integer i, m;
+    reg [31:0] rb;
     initial begin
-        bus_idle(); i_wb_adr = 0; i_wb_dat = 0;
-        i_wb_rst = 1; @(posedge i_wb_clk); @(posedge i_wb_clk); i_wb_rst = 0; #1;
+        errors = 0; tests = 0; run_cycles = 0; max_addr = 0;
+        repeat (4) @(negedge clk);
+        rst = 0;
+        // K clamp
+        wb_write(16'h8004, 32'd300);
+        wb_read(16'h8004, rb);
+        if (rb !== 32'd256) begin errors = errors + 1; $display("K clamp failed: %0d", rb); end
 
-        // T1: idle after reset — no ACK/ERR/IRQ, all registers clear
-        check(o_wb_ack, 0, "T1_ACK=0_idle");
-        check(o_wb_err, 0, "T1_ERR=0_idle");
-        check(o_irq,    0, "T1_IRQ=0_idle");
-        wb_read(`WB_MAC_STATUS, 32'h0, "T1_STATUS=0");
-        wb_read(`WB_MAC_LEN,    32'h0, "T1_LEN=0");
-        wb_read(`WB_MAC_ACC_LO, 32'h0, "T1_ACC_LO=0");
-        wb_read(`WB_MAC_ACC_HI, 32'h0, "T1_ACC_HI=0");
-        wb_read(`WB_MAC_CTRL,   32'h0, "T1_CTRL_reads_0");
+        for (m = 0; m < 3; m = m + 1) begin
+            run_test(1, m);  run_test(2, m);  run_test(3, m);  run_test(4, m);
+            run_test(5, m);  run_test(6, m);  run_test(7, m);  run_test(8, m);
+            run_test(9, m);  run_test(16, m); run_test(33, m); run_test(100, m);
+            run_test(255, m); run_test(256, m);
+        end
+        for (i = 0; i < 30; i = i + 1) run_test(1 + ($random & 63), i % 3);
 
-        // T2: bus guards — o_wb_dat is intentionally ungated here (unlike wb_ram),
-        // so only ACK/ERR are meaningful when the bus is not granted
-        @(negedge i_wb_clk);
-        i_wb_adr = `WB_MAC_BASE; i_wb_we = 0; i_wb_stb = 1; i_wb_cyc = 0; #1;
-        check(o_wb_ack, 0, "T2_ACK=0_STB_without_CYC");
-        check(o_wb_err, 0, "T2_ERR=0_STB_without_CYC");
-        @(negedge i_wb_clk);
-        i_wb_stb = 0; i_wb_cyc = 1; #1;
-        check(o_wb_ack, 0, "T2_ACK=0_CYC_without_STB");
-        check(o_wb_err, 0, "T2_ERR=0_CYC_without_STB");
-        bus_idle();
+        // CLEAR_RESULTS must zero the array
+        wb_write(16'h8008, 32'h2);
+        for (i = 0; i < 32; i = i + 1) begin
+            wb_read(i*4, rb);
+            if (rb !== 0) begin errors = errors + 1; $display("CLEAR failed word %0d", i); end
+        end
 
-        // T3: buffer memory — write/read-back, A/B independence, boundary, unwritten
-        wb_write_chk(`WB_MAC_BASE + `WB_MAC_BUFA_OFF + 32'h0, 32'hDEAD_BEEF, "T3_bufA_write_ACK1_ERR0");
-        wb_write    (`WB_MAC_BASE + `WB_MAC_BUFA_OFF + 32'h4, 32'h1234_5678);
-        wb_write    (`WB_MAC_BASE + `WB_MAC_BUFB_OFF + 32'h0, 32'hCAFE_BABE);
-        wb_write    (`WB_MAC_BASE + `WB_MAC_BUFB_OFF + 32'h4, 32'hA5A5_5A5A);
-        wb_read (`WB_MAC_BASE + `WB_MAC_BUFA_OFF + 32'h0, 32'hDEAD_BEEF, "T3_bufA_word0");
-        wb_read (`WB_MAC_BASE + `WB_MAC_BUFB_OFF + 32'h0, 32'hCAFE_BABE, "T3_bufB_word0_independent");
-        wb_read (`WB_MAC_BASE + `WB_MAC_BUFA_OFF + 32'h4, 32'h1234_5678, "T3_bufA_word1");
-        wb_read (`WB_MAC_BASE + `WB_MAC_BUFB_OFF + 32'h4, 32'hA5A5_5A5A, "T3_bufB_word1");
-        wb_write(`WB_MAC_BASE + 32'h3FFC, 32'hFFFF_0001);              // BUF_A word 4095
-        wb_write(`WB_MAC_BASE + 32'h7FFC, 32'h0000_FFFE);              // BUF_B word 4095
-        wb_read (`WB_MAC_BASE + 32'h3FFC, 32'hFFFF_0001, "T3_bufA_top_word4095");
-        wb_read (`WB_MAC_BASE + 32'h7FFC, 32'h0000_FFFE, "T3_bufB_top_word4095");
-        wb_read (`WB_MAC_BASE + 32'h0190, 32'h0000_0000, "T3_bufA_unwritten_reads_0");
-
-        // T4: control registers — write/read-back, 32-byte alias, unmapped index
-        wb_write(`WB_MAC_LEN,    32'd8);
-        wb_write(`WB_MAC_ACC_LO, 32'h1111_2222);
-        wb_write(`WB_MAC_ACC_HI, 32'h3333_4444);
-        wb_read (`WB_MAC_LEN,    32'd8,         "T4_LEN_readback");
-        wb_read (`WB_MAC_ACC_LO, 32'h1111_2222, "T4_ACC_LO_readback");
-        wb_read (`WB_MAC_ACC_HI, 32'h3333_4444, "T4_ACC_HI_readback");
-        wb_read (`WB_MAC_BASE + 32'h8028, 32'd8, "T4_LEN_alias_0x8028"); // page aliases every 32 B
-        wb_read (`WB_MAC_BASE + 32'h8014, 32'h0, "T4_unmapped_reg_reads_0");
-
-        // T5: LEN clamps to BUF_DEPTH (4096) instead of wrapping
-        wb_write(`WB_MAC_LEN, 32'd5000);
-        wb_read (`WB_MAC_LEN, 32'd4096, "T5_LEN_clamped_5000");
-        wb_write(`WB_MAC_LEN, 32'd4096);
-        wb_read (`WB_MAC_LEN, 32'd4096, "T5_LEN_max_4096");
-
-        // T6: START ignored when LEN=0
-        wb_write(`WB_MAC_LEN,  32'd0);
-        wb_write(`WB_MAC_CTRL, 32'h1);
-        repeat (4) @(posedge i_wb_clk);
-        wb_read(`WB_MAC_STATUS, 32'h0, "T6_START_ignored_when_LEN=0");
-        check(o_irq, 0, "T6_IRQ=0_no_run");
-
-        // T7: signed MAC run — 3*5 + (-4)*7 + (-6)*(-8) + 100*(-3) = -265
-        wb_write(`WB_MAC_CTRL, 32'h2);                                 // CLR_ACC
-        wb_write(`WB_MAC_BASE + 32'h0000, 32'h0000_0003);              // A[0] =   3
-        wb_write(`WB_MAC_BASE + 32'h0004, 32'hFFFF_FFFC);              // A[1] =  -4
-        wb_write(`WB_MAC_BASE + 32'h0008, 32'hFFFF_FFFA);              // A[2] =  -6
-        wb_write(`WB_MAC_BASE + 32'h000C, 32'h0000_0064);              // A[3] = 100
-        wb_write(`WB_MAC_BASE + 32'h4000, 32'h0000_0005);              // B[0] =   5
-        wb_write(`WB_MAC_BASE + 32'h4004, 32'h0000_0007);              // B[1] =   7
-        wb_write(`WB_MAC_BASE + 32'h4008, 32'hFFFF_FFF8);              // B[2] =  -8
-        wb_write(`WB_MAC_BASE + 32'h400C, 32'hFFFF_FFFD);              // B[3] =  -3
-        wb_write(`WB_MAC_LEN,  32'd4);
-        wb_read (`WB_MAC_ACC_LO, 32'h0, "T7_ACC_cleared_before_run");
-        wb_write(`WB_MAC_CTRL, 32'h1);                                 // START
-        wb_read (`WB_MAC_STATUS, 32'h1, "T7_BUSY=1_during_run");
-        wait_done("T7_DONE_set");
-        check(o_irq, 1, "T7_IRQ=1_while_DONE");
-        wb_read(`WB_MAC_ACC_LO, 32'hFFFF_FEF7, "T7_ACC_LO=-265");
-        wb_read(`WB_MAC_ACC_HI, 32'hFFFF_FFFF, "T7_ACC_HI_sign_extended");
-        clear_done();
-        wb_read(`WB_MAC_STATUS, 32'h0, "T7_DONE_cleared_by_write1");
-        check(o_irq, 0, "T7_IRQ=0_after_clear");
-
-        // T8: second run accumulates onto the old value (no CLR_ACC) -> -530
-        wb_write(`WB_MAC_CTRL, 32'h1);
-        wait_done("T8_DONE_set");
-        wb_read(`WB_MAC_ACC_LO, 32'hFFFF_FDEE, "T8_ACC_LO=-530_accumulated");
-        wb_read(`WB_MAC_ACC_HI, 32'hFFFF_FFFF, "T8_ACC_HI_still_sign");
-        clear_done();
-
-        // T9: LEN / ACC_LO writes are ignored while BUSY -> third run gives -795
-        wb_write(`WB_MAC_CTRL,   32'h1);                               // START (LEN still 4)
-        wb_write(`WB_MAC_LEN,    32'd1);                               // ignored — busy
-        wb_write(`WB_MAC_ACC_LO, 32'hDEAD_BEEF);                       // ignored — busy
-        wait_done("T9_DONE_set");
-        wb_read(`WB_MAC_LEN,    32'd4,         "T9_LEN_unchanged_during_busy");
-        wb_read(`WB_MAC_ACC_LO, 32'hFFFF_FCE5, "T9_ACC_LO=-795_not_corrupted");
-        clear_done();
-
-        // T10: single element + 64-bit carry — 0x40000000 * 4 = 0x1_0000_0000
-        wb_write(`WB_MAC_CTRL, 32'h2);                                 // CLR_ACC
-        wb_write(`WB_MAC_BASE + 32'h0000, 32'h4000_0000);              // A[0]
-        wb_write(`WB_MAC_BASE + 32'h4000, 32'h0000_0004);              // B[0]
-        wb_write(`WB_MAC_LEN,  32'd1);
-        wb_write(`WB_MAC_CTRL, 32'h1);
-        wait_done("T10_DONE_set_LEN=1");
-        wb_read(`WB_MAC_ACC_LO, 32'h0000_0000, "T10_ACC_LO_carry_out");
-        wb_read(`WB_MAC_ACC_HI, 32'h0000_0001, "T10_ACC_HI_carry_in");
-
-        // T11: reset clears engine state (buffers are not reset-gated and survive)
-        i_wb_rst = 1; @(posedge i_wb_clk); @(posedge i_wb_clk); i_wb_rst = 0; #1;
-        wb_read(`WB_MAC_STATUS, 32'h0, "T11_STATUS_cleared_by_reset");
-        wb_read(`WB_MAC_LEN,    32'h0, "T11_LEN_cleared_by_reset");
-        wb_read(`WB_MAC_ACC_LO, 32'h0, "T11_ACC_LO_cleared_by_reset");
-        wb_read(`WB_MAC_ACC_HI, 32'h0, "T11_ACC_HI_cleared_by_reset");
-        check(o_irq, 0, "T11_IRQ=0_after_reset");
-        wb_read(`WB_MAC_BASE + 32'h3FFC, 32'hFFFF_0001, "T11_bufA_survives_reset");
-
-        $display("\n=============================");
-        $display("  PASS: %0d   FAIL: %0d", pass, fail);
-        $display("=============================\n");
+        if (errors == 0) $display("PASS: %0d tests (MEM_LAT=%0d MULT_PIPE=%0d)", tests, MEM_LAT, MULT_PIPE);
+        else             $display("FAIL: %0d errors", errors);
         $finish;
     end
 
+    initial begin #200000000; $display("TIMEOUT"); $finish; end
 endmodule

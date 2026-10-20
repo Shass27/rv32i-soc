@@ -9,6 +9,8 @@ module tb_cpu_top_wb_mac;
     reg reset;
 
     integer cycle;
+    integer r, c, kk;
+    reg signed [63:0] exp_c;
     integer errors;
 
     // DUT: top-level CPU
@@ -22,12 +24,11 @@ module tb_cpu_top_wb_mac;
     // inst_mem/data_memory have run their own $readmemh at t=0.
     // ---------------------------------------------------------
     `include "rv32i_asm.vh"
-    `include "dma_driver.vh"
+    `include "mac_driver.vh"
 
     initial begin
         #1;
-        load_dma_driver;
-        load_mac_data;
+        load_mac_driver;
     end
 
     // ---------------------------------------------------------
@@ -106,7 +107,7 @@ module tb_cpu_top_wb_mac;
     // 0xD8: 123453b7    lui   x7,  0x12345            // x7 = 0x12345000
     // 0xDC: 00001417    auipc x8,  0x1                // x8 = 0xDC + 0x1000 = 0x10DC
     //
-    // ===== MAC accelerator driver (injected at 0xE0, see mac_driver.vh) =====
+    // ===== MAC accelerator driver (injected at 0xE0, see mac_driver.vh; 4x4 matrix multiply K=4) =====
     // Runs after the base program; results are checked after the run, not per cycle,
     // because bus accesses stall the core and break the cycle-to-instruction mapping.
     //
@@ -550,16 +551,29 @@ module tb_cpu_top_wb_mac;
         errors = 0;
 
         // 3 reset cycles + 50 instruction cycles + MAC driver (bus stalls, poll) + margin
-        repeat (250) @(posedge clk);
+        repeat (800) @(posedge clk);
 
-        // DMA driver results (parked at DRV_DONE)
-        check_eq32("dma-pc",     u_dut.pc,                       DRV_DONE);
-        check_eq32("dma-acc",    u_dut.u_mac.acc[31:0],          32'd70);
-        check_eq32("dma-x17",    u_dut.u_regfile.registers[17],  32'd70);
-        check_eq32("dma-x18",    u_dut.u_regfile.registers[18],  32'd0);
-        check_eq1 ("dma-idle",   u_dut.u_mac.busy,               1'b0);
-        check_eq1 ("dma-noerr",  u_dut.wb_err_flag,              1'b0);
-        $display("DMA driver: %0d cycles (DRV_BASE -> DRV_DONE, N=%0d)", drv_t1 - drv_t0, DRV_LEN);
+        // Matrix driver results (parked at DRV_DONE)
+        check_eq32("mac-pc",     u_dut.pc,                       DRV_DONE);
+        for (r = 0; r < 4; r = r + 1)
+            for (c = 0; c < 4; c = c + 1) begin
+                exp_c = 0;
+                for (kk = 0; kk < DRV_K; kk = kk + 1)
+                    exp_c = exp_c + a_val(r, kk) * b_val(kk, c);
+                check_eq32("mac-C-lo(dma)", u_dut.u_mem.memory[RES_RAM/4 + (r*4+c)*2],     exp_c[31:0]);
+                check_eq32("mac-C-hi(dma)", u_dut.u_mem.memory[RES_RAM/4 + (r*4+c)*2 + 1], exp_c[63:32]);
+                if (r == 0 && c == 0) begin
+                    check_eq32("mac-x17", u_dut.u_regfile.registers[17], exp_c[31:0]);
+                    check_eq32("mac-x18", u_dut.u_regfile.registers[18], exp_c[63:32]);
+                end
+                if (r == 3 && c == 3) begin
+                    check_eq32("mac-x19", u_dut.u_regfile.registers[19], exp_c[31:0]);
+                    check_eq32("mac-x20", u_dut.u_regfile.registers[20], exp_c[63:32]);
+                end
+            end
+        check_eq1 ("mac-idle",   u_dut.u_mac.busy,               1'b0);
+        check_eq1 ("mac-noerr",  u_dut.wb_err_flag,              1'b0);
+        $display("MAC driver: %0d cycles (DRV_BASE -> DRV_DONE, K=%0d)", drv_t1 - drv_t0, DRV_K);
 
         if (errors == 0) begin
             $display("PASS: all checks passed");

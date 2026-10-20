@@ -63,6 +63,9 @@ This document summarizes the major control signals used across the RV32I single-
 | MEM_SIZE = 4097 | data_memory | Words in the local memory array (`memory[0:MEM_SIZE-1]`), preloaded with `$readmemh("hardware/src/core/mem/data.hex", memory)` (resolved from the repo root). The array has `(* ram_style = "distributed" *)` (asynchronous reads). |
 | TOHOST_ADDR = 32'h000001c0 | data_memory | Address watched by the riscv-tests proxy. A write to it is intercepted (not stored in `memory`): value `1` prints `TOHOST: PASS` and calls `$finish`; any other nonzero value prints `TOHOST: FAIL` and calls `$finish`; `0` is only recorded in the internal `tohost` reg and simulation continues. |
 | pc | alu_module | See table above (`AUIPC_OP` only). |
+| MAT_BASE = 32'h4000_0000 | cpu_top_wb | Base of the core-local matrix window. Must be aligned to its size (`2**MAT_WIN_BITS` bytes) and not overlap `data_memory` (`0x0000_0000`-`0x0000_FFFF`) or any bus slave page. |
+| MAT_K_MAX = 256 | cpu_top_wb | Maximum inner dimension K; power of two. Window size is `32*MAT_K_MAX` bytes (8 KB). Also passed to `matrix_mem.K_MAX` and `wb_mac_accel.K_MAX`. |
+| MAT_MEM_LAT = 0, MAT_MULT_PIPE = 0 | cpu_top_wb | Passed to `matrix_mem.MEM_LAT` and `wb_mac_accel.MEM_LAT` (must match) and to `wb_mac_accel.MULT_PIPE`. |
 
 ## IO split / stall (cpu_top_wb)
 
@@ -70,7 +73,12 @@ Bottom 64 KB is served by local `data_memory`; any load/store with `ALU_result[3
 
 | Signal | Width | Description |
 |---|---|---|
-| io_sel | 1 | `(MemRead \| MemWrite) & (ALU_result[31:16] != 16'h0000)`. Also masks `MemRead`/`MemWrite` into `data_memory` port A: `MemRead & ~io_sel`, `MemWrite & ~io_sel & ~dma_busy` (a frozen SW must not collide with DMA port B). |
+| MAT_WIN_BITS | localparam | `$clog2(MAT_K_MAX) + 5`; matrix window size is `2**MAT_WIN_BITS` bytes. |
+| mat_sel | 1 | `(MemRead \| MemWrite) & (ALU_result[31:MAT_WIN_BITS] == MAT_BASE[31:MAT_WIN_BITS])`. The access hits the matrix window: single-cycle, never on the bus. |
+| mat_we | 1 | `MemWrite & mat_sel & (funct3 == 3'b010) & ~dma_busy`; only `SW` writes the window (`SB`/`SH` are ignored), held off while the DMA freezes the CPU so a frozen store executes once. |
+| mat_tile | 256 | `matrix_mem.tile` to `wb_mac_accel.i_mem_tile`: `{B[k][3..0], A[3..0][k]}` for the current `k`. |
+| mat_tile_addr | 32 | `wb_mac_accel.o_mem_tile_addr` to `matrix_mem.tile_addr`; tile index `k = tile_addr[5 +: LOGK]`. |
+| io_sel | 1 | `(MemRead \| MemWrite) & (ALU_result[31:16] != 16'h0000) & ~mat_sel`. Also masks `MemRead`/`MemWrite` into `data_memory` port A: `MemRead & ~io_sel & ~mat_sel`, `MemWrite & ~io_sel & ~mat_sel & ~dma_busy` (a frozen SW must not collide with DMA port B). |
 | stall | 1 | `~wb_done & (io_sel \| dma_busy)`. Feeds `program_counter.stall`. |
 | dma_busy | 1 | `wb_dma.o_busy`. Halts the CPU (`stall`) and selects the DMA as bus owner. |
 | RegWrite_gated | 1 | `RegWrite & ~stall`; drives `reg_file.RegWrite`. |
@@ -83,7 +91,7 @@ Bottom 64 KB is served by local `data_memory`; any load/store with `ALU_result[3
 | b_we, b_addr, b_wdat | 1 / 32 / 32 | Port-B mux into `data_memory`: `dma_busy ? dma_b_* : sort_b_*`. |
 | b_rdat | 32 | `data_memory.o_b_rdat`; feeds `wb_dma.i_b_rdat` and `sort_b_rdat`. |
 | mem_rdata_local | 32 | `data_memory` read output. |
-| mem_rdata | 32 | `io_sel ? wb_rdat : mem_rdata_local`; feeds `writeback_mux`. |
+| mem_rdata | 32 | `io_sel ? wb_rdat : mat_sel ? 32'b0 : mem_rdata_local`; feeds `writeback_mux`. The matrix window is write-only, so a load from it returns 0 instead of aliasing `data_memory`. |
 | wb_req | 1 | `io_sel & ~wb_busy & ~wb_done & ~dma_busy`; one request pulse per IO instruction into `wb_master.i_req`, never while the DMA owns the bus. |
 | wb_busy | 1 | `wb_master.o_busy`. |
 | wb_done | 1 | `wb_master.o_done`, 1-cycle pulse; releases `stall`. |
@@ -96,13 +104,16 @@ Bottom 64 KB is served by local `data_memory`; any load/store with `ALU_result[3
 | dma_adr, dma_dat | 32 | `wb_dma` master address / write data. |
 | dma_ack, dma_err | 1 | `ic_ack & dma_busy`, `ic_err & dma_busy`; into `wb_dma.i_m_ack` / `i_m_err`. |
 | m_cyc, m_stb, m_we | 1 | Bus-owner mux output: `dma_busy ? dma_* : cpu_*`. `m_we` is broadcast to all slaves; `m_cyc`/`m_stb` go to the interconnect only. |
-| m_adr, m_dat | 32 | Bus-owner mux output (`dma_busy ? dma_* : cpu_*`), broadcast to `wb_mac_accel`, `wb_dma` (slave port), `wb_sort` and `wb_err`. |
+| m_adr, m_dat | 32 | Bus-owner mux output (`dma_busy ? dma_* : cpu_*`), broadcast to `wb_mac_accel`, `wb_dma` (slave port), `wb_sort`, `wb_search_accel` and `wb_err`. |
 | ram_cyc, ram_stb | 1 | Interconnect RAM-slot outputs; declared but unconnected (RAM port stubbed: `i_ram_dat=0`, `i_ram_ack=0`). |
 | mac_cyc, mac_stb | 1 | Interconnect outputs to `wb_mac_accel`. |
 | err_cyc, err_stb | 1 | Interconnect outputs to `wb_err`. |
 | sort_cyc, sort_stb | 1 | Interconnect outputs to `wb_sort`. |
 | sort_dat | 32 | `wb_sort` read data back to the interconnect. |
 | sort_ack, sort_err | 1 | `wb_sort` responses (`sort_ack` is registered; `sort_err` is never set, always 0). |
+| search_cyc, search_stb | 1 | Interconnect outputs to `wb_search_accel`. |
+| search_dat | 32 | `wb_search_accel` read data back to the interconnect. |
+| search_ack, search_err | 1 | `wb_search_accel` responses (`search_ack` is combinational `cyc & stb`; `search_err` is always 0). |
 | mac_dat, err_dat | 32 | Slave read data back to the interconnect. |
 | mac_ack, mac_err | 1 | `wb_mac_accel` responses (`mac_err` is always 0). |
 | dma_s_cyc, dma_s_stb | 1 | Interconnect outputs to the `wb_dma` slave (register page). |
@@ -112,7 +123,7 @@ Bottom 64 KB is served by local `data_memory`; any load/store with `ALU_result[3
 | ic_ack, ic_err | 1 | Interconnect response; split into `cpu_ack/err` and `dma_ack/err` by `dma_busy`. |
 | ic_dat | 32 | Interconnect read data to both `wb_master.i_wb_dat` and `wb_dma.i_m_dat`. |
 
-Bus is word-only (no `SEL`): `SB`/`SH` to IO space writes a full word. An IO access to a combinational-ACK slave (MAC, DMA, `wb_err`) costs 3 cycles (request, ACTIVE with combinational ACK, done pulse); writeback and the PC advance happen on the `wb_done` cycle. A `wb_sort` access costs 4 cycles (request, ACTIVE while the slave registers its ACK, ACTIVE with ACK seen, done pulse); this is derived by tracing `wb_master` and `wb_sort`, not simulated.
+Bus is word-only (no `SEL`): `SB`/`SH` to IO space writes a full word. An IO access to a combinational-ACK slave (MAC, DMA, `wb_search_accel`, `wb_err`) costs 3 cycles (request, ACTIVE with combinational ACK, done pulse); writeback and the PC advance happen on the `wb_done` cycle. A `wb_sort` access costs 4 cycles (request, ACTIVE while the slave registers its ACK, ACTIVE with ACK seen, done pulse); this is derived by tracing `wb_master` and `wb_sort`, not simulated. A store into the matrix window is not an IO access: it takes 1 cycle and no stall.
 
 ## wb_master ports
 
@@ -140,7 +151,7 @@ Effective FSM is IDLE -> ACTIVE -> IDLE. A `DONE` state is declared but unreacha
 
 ## wb_interconnect
 
-Ports: master side `i_wb_cyc/stb/we/adr/dat_ms`, `o_wb_dat_sm`, `o_wb_ack`, `o_wb_err`; per slave (ram, mac, err, dma, sort) `o_*_cyc/stb`, `i_*_dat`, `i_*_ack`, plus `i_mac_err`, `i_dma_err`, `i_sort_err` and `i_err_err`. `i_err_ack` exists but is intentionally unused.
+Ports: master side `i_wb_cyc/stb/we/adr/dat_ms`, `o_wb_dat_sm`, `o_wb_ack`, `o_wb_err`; per slave (ram, mac, err, dma, sort, search) `o_*_cyc/stb`, `i_*_dat`, `i_*_ack`, plus `i_mac_err`, `i_dma_err`, `i_sort_err`, `i_search_err` and `i_err_err`. `i_err_ack` exists but is intentionally unused.
 
 | Item | Equation / note |
 |---|---|
@@ -148,28 +159,85 @@ Ports: master side `i_wb_cyc/stb/we/adr/dat_ms`, `o_wb_dat_sm`, `o_wb_ack`, `o_w
 | sel_mac | `adr[31:16] == 16'h1000` (0x1000_0000 - 0x1000_FFFF) |
 | sel_dma | `adr[31:16] == 16'h2000` (0x2000_0000 - 0x2000_FFFF) |
 | sel_sort | `adr[31:16] == 16'h3000` (0x3000_0000 - 0x3000_FFFF) |
-| sel_err | `~sel_ram & ~sel_mac & ~sel_dma & ~sel_sort` (catch-all) |
+| sel_search | `adr[31:16] == 16'h5000` (0x5000_0000 - 0x5000_FFFF) |
+| sel_err | `~(sel_ram \| sel_mac \| sel_dma \| sel_sort \| sel_search)` (catch-all) |
 | o_*_cyc / o_*_stb | `i_wb_cyc/stb & sel_*` |
-| o_wb_ack | `(sel_ram ? i_ram_ack : 0) \| (sel_mac ? i_mac_ack : 0) \| (sel_dma ? i_dma_ack : 0) \| (sel_sort ? i_sort_ack : 0)` |
-| o_wb_err | `(sel_mac ? i_mac_err : 0) \| (sel_dma ? i_dma_err : 0) \| (sel_sort ? i_sort_err : 0) \| (sel_err ? i_err_err : 0)` |
-| o_wb_dat_sm | `sel_ram ? i_ram_dat : sel_mac ? i_mac_dat : sel_dma ? i_dma_dat : sel_sort ? i_sort_dat : i_err_dat` |
+| o_wb_ack | `(sel_ram ? i_ram_ack : 0) \| (sel_mac ? i_mac_ack : 0) \| (sel_dma ? i_dma_ack : 0) \| (sel_sort ? i_sort_ack : 0) \| (sel_search ? i_search_ack : 0)` |
+| o_wb_err | `(sel_mac ? i_mac_err : 0) \| (sel_dma ? i_dma_err : 0) \| (sel_sort ? i_sort_err : 0) \| (sel_search ? i_search_err : 0) \| (sel_err ? i_err_err : 0)` |
+| o_wb_dat_sm | `sel_ram ? i_ram_dat : sel_mac ? i_mac_dat : sel_dma ? i_dma_dat : sel_sort ? i_sort_dat : sel_search ? i_search_dat : i_err_dat` |
 | wb_ram | Has no ERR port. |
 
 ## wb_mac_accel
 
-Parameters: `ADDR_WIDTH = 16` (64 KB slot), `DATA_WIDTH = 32`, `BUF_AW = 12` (4096 words per buffer). Computes `acc += sum(A[i]*B[i])`, signed 32x32 -> 64, one element per clock. ACK is combinational (`o_wb_ack = access`), `o_wb_err = 0`, `o_irq = done` (left unconnected in `cpu_top_wb`).
+4x4 output-stationary systolic matrix multiplier: `C = A(4xK) * B(Kx4)`, signed 32-bit inputs, signed 64-bit results, one K step (16 MACs) per clock. Instantiated as `u_mac` in `cpu_top_wb`. Parameters: `ADDR_WIDTH = 16` (64 KB slot), `DATA_WIDTH = 32`, `K_MAX = 256`, `MEM_LAT = 0`, `MULT_PIPE = 0` (see above for how `cpu_top_wb` sets them). ACK is combinational (`o_wb_ack = access`), `o_wb_err = 0`, `o_irq = done` (left unconnected in `cpu_top_wb`). The operands are not read over Wishbone: the slave fetches one 256-bit tile per cycle from `matrix_mem` through its own tile port.
+
+| Port | Dir | Width | Description |
+|---|---|---|---|
+| i_wb_clk, i_wb_rst | in | 1 | Clock, synchronous reset (`clk`, `reset`). |
+| i_wb_adr, i_wb_dat | in | 32 | Address / write data (`m_adr` / `m_dat`, broadcast). |
+| i_wb_we, i_wb_stb, i_wb_cyc | in | 1 | Slave control (`m_we`, `mac_stb`, `mac_cyc`). |
+| o_wb_dat | out | 32 | Combinational read data (`mac_dat`). |
+| o_wb_ack, o_wb_err, o_irq | out | 1 | `access`, 0, `done`. |
+| o_mem_tile_addr | out | 32 | Byte address of the tile to read, 32-byte aligned, driven from a register (`mat_tile_addr`). |
+| i_mem_tile | in | 256 | Tile from `matrix_mem` (`mat_tile`): words 0-3 = `A[0..3][k]`, words 4-7 = `B[k][0..3]`. |
 
 | Offset (from 0x1000_0000) | Name | Description |
 |---|---|---|
-| 0x0000 - 0x3FFF | BUF_A | 4096 signed words. |
-| 0x4000 - 0x7FFF | BUF_B | 4096 signed words. |
-| 0x8000 | CTRL | `[0]` START, `[1]` CLR_ACC; self-clearing, reads 0. Both ignored while BUSY; START also ignored if `LEN == 0`. |
-| 0x8004 | STATUS | `[0]` BUSY (RO), `[1]` DONE (sticky, write 1 to clear). |
-| 0x8008 | LEN | Element count; values above 4096 clamp to 4096. Writable while idle. |
-| 0x800C | ACC_LO | `acc[31:0]`, writable while idle. |
-| 0x8010 | ACC_HI | `acc[63:32]`, writable while idle. |
+| 0x0000 - 0x007C | C | 16 results `C[r][c]`, index `4r + c`; word `2*index` = low 32 bits, `2*index + 1` = high 32 bits. Read only, writes ignored. |
+| 0x8000 | DATA_BASE | Byte address of tile 0 (`{i_wb_dat[31:5], 5'b0}`); writable while idle. Set to `MAT_BASE`. |
+| 0x8004 | K | Inner dimension; values above `K_MAX` clamp to `K_MAX`. Writable while idle. |
+| 0x8008 | CTRL | `[0]` START, `[1]` CLEAR_RESULTS; accepted only while idle, reads 0. START is ignored if `K == 0`. Either bit moves the FSM to the clear state; CLEAR_RESULTS also clears DONE, START clears DONE. |
+| 0x800C | STATUS | `[0]` BUSY (`state != IDLE`), `[1]` DONE. Writing 1 to bit 1 clears DONE (allowed while busy). |
 
-Register page is aliased every 32 bytes (index = `offset[4:2]`); indices 5-7 read 0. Do not write buffers while BUSY.
+Register decode is `offset[15]` set and `offset[14:4] == 0` (so `0x8000`-`0x800F`), index = `offset[3:2]`; result decode is `offset[15]` clear and `offset[14:7] == 0`. Every other offset reads 0 and writes are ignored.
+
+FSM: `S_IDLE` -> `S_CLR` -> `S_RUN` -> `S_IDLE`. `S_CLR` is one cycle that clears the 16 accumulators (`clear_acc`), loads `mem_addr = DATA_BASE` and `cnt = K + TAIL`; with START it goes to `S_RUN` and raises `issue`, otherwise (CLEAR_RESULTS) back to `S_IDLE`. In `S_RUN` `mem_addr` steps by 32 per tile until `last_issue`, `cnt` counts down, and `done` is set when `cnt == 0`. `TAIL = 5 + MEM_LAT + MULT_PIPE`, so RUN lasts `K + 6 + MEM_LAT + MULT_PIPE` cycles (checked by `tb_wb_mac_accel`) plus the one `S_CLR` cycle of BUSY. Operands outside the `issue` window are zeroed, so the skew registers (row r of A and column c of B delayed r / c cycles) and PE array flush with zeros. Accumulators add only in `S_RUN`.
+
+## matrix_mem
+
+Core-local scratch memory for the MAC, instantiated as `u_matmem` in `cpu_top_wb`; not a Wishbone slave. 8 single-word banks of `K_MAX` words (banks 0-3 hold the rows of A, banks 4-7 the columns of B), so one index `k` reads a full 256-bit tile.
+
+| Port / param | Dir | Width | Description |
+|---|---|---|---|
+| K_MAX = 256, MEM_LAT = 0 | param | - | Depth per bank (power of two); `0` = combinational read, `1` = registered read. Must match `wb_mac_accel`. |
+| clk | in | 1 | Clock; the write is synchronous. |
+| we | in | 1 | Word write enable (`mat_we`). |
+| waddr, wdata | in | 32 | Byte address (`ALU_result`) and data (`rs2_data`); only the bits inside the window are used. |
+| tile_addr | in | 32 | `mat_tile_addr`; `k = tile_addr[5 +: LOGK]`. |
+| tile | out | 256 | `{B[k][3..0], A[3..0][k]}`. |
+
+Window layout, as C arrays: `int32_t A[4][K_MAX]` at word offset 0 (row pitch `K_MAX`), `int32_t B[K_MAX][4]` at word offset `4*K_MAX`. Word index `wi = waddr >> 2`; `wi[LOGK+2]` selects B, then A row = `wi[LOGK+1:LOGK]` or B column = `wi[1:0]`. There is no read port for the CPU and no reset, so contents persist until overwritten.
+
+## wb_search_accel
+
+Binary-search (lower-bound) accelerator over a sorted array of signed words held inside the slave. Instantiated as `u_search` in `cpu_top_wb`; register page at `0x5000_0000`. ACK is combinational (`o_wb_ack = i_wb_cyc & i_wb_stb`), `o_wb_err = 0`. It has no memory port to `data_memory`, so it never competes with the DMA or SORT for port B.
+
+| Port | Dir | Width | Description |
+|---|---|---|---|
+| i_wb_clk, i_wb_rst | in | 1 | Clock, synchronous reset (`clk`, `reset`). |
+| i_wb_adr, i_wb_dat | in | 32 | Address / write data (`m_adr` / `m_dat`, broadcast). |
+| i_wb_we, i_wb_stb, i_wb_cyc | in | 1 | Slave control (`m_we`, `search_stb`, `search_cyc`). |
+| o_wb_dat | out | 32 | Combinational read data (`search_dat`). |
+| o_wb_ack, o_wb_err | out | 1 | `cyc & stb`, always 0. |
+
+| Offset (from 0x5000_0000) | Name | Description |
+|---|---|---|
+| 0x0000 - 0x7FFC | ARRAY | 8192 signed words (`array_mem`, index `adr[14:2]`). Read/write; writes are dropped while BUSY. |
+| 0x8000 | CTRL | `[0]` START, `[1]` CLEAR. START has priority. Accepted only while not BUSY; reads 0. |
+| 0x8004 | STATUS | Read only: `[0]` BUSY, `[1]` DONE, `[2]` FOUND, `[3]` ERROR. |
+| 0x8008 | LEN | Element count. Writable while not BUSY. |
+| 0x800C | KEY | Signed key. Writable while not BUSY. |
+| 0x8010 | RESULT | Read only: index of `KEY` if found, else `0xFFFF_FFFF`. Reset value `0xFFFF_FFFF`. |
+| 0x8014 | COMPS | Read only: comparisons used by the last search. |
+
+Register decode is `adr[15]` set and `adr[15:2]` against `0x2000`-`0x2005`; other register offsets read 0 and ignore writes. START clears DONE/FOUND/ERROR, sets `RESULT = 0xFFFF_FFFF` and `COMPS = 0`. CLEAR clears only DONE and ERROR (FOUND and RESULT keep their values). DONE is not write-1-to-clear.
+
+Engine (`low_reg`, `high_reg`, 14 bits; `high` is exclusive): START with `LEN <= 8192` loads `low = 0`, `high = LEN` and sets BUSY; `LEN > 8192` sets DONE and ERROR at once with BUSY low. While BUSY and `low < high` each cycle compares `array_mem[mid] < key` (`mid = low + (high - low) / 2`, signed compare), moving `low = mid + 1` or `high = mid`, and counts one comparison. When `low >= high` one more cycle clears BUSY, sets DONE and, if `low < LEN`, spends one more comparison on `array_mem[low] == key` to set FOUND and `RESULT = low`.
+
+Caveats (from the RTL):
+- The CPU is not stalled by SEARCH; software must poll STATUS.DONE.
+- The array must already be sorted ascending (signed); there is no check. `LEN == 0` finishes in one cycle with FOUND = 0.
+- Bus reads of ARRAY while BUSY are allowed; writes are silently ignored.
 
 ## wb_dma
 
@@ -261,18 +329,17 @@ Caveats (from the RTL, not simulated):
 | WB_MAC_BASE | 32'h1000_0000 |
 | WB_MAC_SIZE | 32'h0001_0000 |
 | WB_MAC_END | 32'h1000_FFFF |
-| WB_MAC_BUFA_OFF | 16'h0000 |
-| WB_MAC_BUFB_OFF | 16'h4000 |
+| WB_MAC_RES_OFF | 16'h0000 |
 | WB_MAC_REG_OFF | 16'h8000 |
-| WB_MAC_CTRL | 32'h1000_8000 |
-| WB_MAC_STATUS | 32'h1000_8004 |
-| WB_MAC_LEN | 32'h1000_8008 |
-| WB_MAC_ACC_LO | 32'h1000_800C |
-| WB_MAC_ACC_HI | 32'h1000_8010 |
+| WB_MAC_DATA_BASE | 32'h1000_8000 |
+| WB_MAC_K | 32'h1000_8004 |
+| WB_MAC_CTRL | 32'h1000_8008 |
+| WB_MAC_STATUS | 32'h1000_800C |
 | WB_MAC_START | 0 |
-| WB_MAC_CLR_ACC | 1 |
+| WB_MAC_CLR | 1 |
 | WB_MAC_BUSY | 0 |
 | WB_MAC_DONE | 1 |
+| WB_MAT_BASE | 32'h4000_0000 |
 | WB_DMA_BASE | 32'h2000_0000 |
 | WB_DMA_END | 32'h2000_FFFF |
 | WB_DMA_SRC | 32'h2000_0000 |
@@ -287,10 +354,18 @@ Caveats (from the RTL, not simulated):
 | WB_SORT_LEN | 32'h3000_0008 |
 | WB_SORT_CTRL | 32'h3000_000C |
 | WB_SORT_STATUS | 32'h3000_0010 |
+| WB_SEARCH_BASE | 32'h5000_0000 |
+| WB_SEARCH_END | 32'h5000_FFFF |
+| WB_SEARCH_CTRL | 32'h5000_8000 |
+| WB_SEARCH_STATUS | 32'h5000_8004 |
+| WB_SEARCH_LEN | 32'h5000_8008 |
+| WB_SEARCH_KEY | 32'h5000_800C |
+| WB_SEARCH_RESULT | 32'h5000_8010 |
+| WB_SEARCH_COMPS | 32'h5000_8014 |
 | WB_ERR_BASE | 32'hFFFF_0000 |
 | WB_ERR_END | 32'hFFFF_FFFF |
 
-Caveat: the `wb_defs.vh` header describes regions by top byte, and `WB_ERR_*` suggests a 0xFFFF_xxxx range. The real decode uses `adr[31:10]` (RAM) and `adr[31:16]` (MAC `16'h1000`, DMA `16'h2000`, SORT `16'h3000`), and the error slave is a catch-all, so e.g. 0x0000_0800 (outside the 1 KB RAM), 0x1001_0000, 0x2001_0000 and 0x3001_0000 hit `wb_err`. The DMA and SORT each own a full 64 KB slot (DMA registers alias every 32 bytes, SORT every 64). In the SoC the low 64 KB never reaches the bus (`io_sel`), so RAM-slot addresses are unreachable there.
+Caveat: the `wb_defs.vh` header describes regions by top byte, and `WB_ERR_*` suggests a 0xFFFF_xxxx range. The real decode uses `adr[31:10]` (RAM) and `adr[31:16]` (MAC `16'h1000`, DMA `16'h2000`, SORT `16'h3000`, SEARCH `16'h5000`), and the error slave is a catch-all, so e.g. 0x0000_0800 (outside the 1 KB RAM), 0x1001_0000, 0x2001_0000, 0x3001_0000 and 0x4000_0000 (the matrix window is core-local, so a DMA transfer aimed at it ends in `wb_err`) hit `wb_err`. The DMA and SORT each own a full 64 KB slot (DMA registers alias every 32 bytes, SORT every 64). In the SoC the low 64 KB never reaches the bus (`io_sel`), so RAM-slot addresses are unreachable there.
 
 > Signal names follow the RTL as implemented. `branch_logic`, `jump_logic` and `imm_gen` are the real module identifiers. The final PC target is selected in `cpu_top_wb` (`jump ? jump_target : branch_target`); the PC then chooses between `target` and `pc + 4` using `branch_taken | jump1 | jump2`, unless `stall` holds it.
 

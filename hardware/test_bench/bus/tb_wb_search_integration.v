@@ -85,6 +85,13 @@ module tb_wb_search_integration;
         .i_dma_ack   (1'b0),
         .i_dma_err   (1'b0),
 
+        // SORT stub
+        .o_sort_cyc  (),
+        .o_sort_stb  (),
+        .i_sort_dat  (32'b0),
+        .i_sort_ack  (1'b0),
+        .i_sort_err  (1'b0),
+
         // SEARCH accelerator
         .o_search_cyc (search_cyc),
         .o_search_stb (search_stb),
@@ -193,7 +200,7 @@ module tb_wb_search_integration;
             poll_count = 0;
 
             while (!status[1] && poll_count < 100) begin
-                wb_read(32'h30008004, status);
+                wb_read(32'h50008004, status);
                 poll_count = poll_count + 1;
             end
 
@@ -235,15 +242,15 @@ module tb_wb_search_integration;
 
         $display("\nTEST 1: Loading sorted array");
 
-        wb_write(32'h30000000, -32'sd8);
-        wb_write(32'h30000004, -32'sd3);
-        wb_write(32'h30000008,  32'sd2);
-        wb_write(32'h3000000C,  32'sd7);
-        wb_write(32'h30000010,  32'sd12);
-        wb_write(32'h30000014,  32'sd19);
-        wb_write(32'h30000018,  32'sd25);
+        wb_write(32'h50000000, -32'sd8);
+        wb_write(32'h50000004, -32'sd3);
+        wb_write(32'h50000008,  32'sd2);
+        wb_write(32'h5000000C,  32'sd7);
+        wb_write(32'h50000010,  32'sd12);
+        wb_write(32'h50000014,  32'sd19);
+        wb_write(32'h50000018,  32'sd25);
 
-        wb_write(32'h30008008, 32'd7);
+        wb_write(32'h50008008, 32'd7);
 
         $display("PASS: Array and length written through bus");
 
@@ -253,13 +260,13 @@ module tb_wb_search_integration;
 
         $display("\nTEST 2: Find key 12");
 
-        wb_write(32'h3000800C, 32'd12);
-        wb_write(32'h30008000, 32'd1);
+        wb_write(32'h5000800C, 32'd12);
+        wb_write(32'h50008000, 32'd1);
 
         wait_for_done();
 
-        wb_read(32'h30008010, result);
-        wb_read(32'h30008014, comparisons);
+        wb_read(32'h50008010, result);
+        wb_read(32'h50008014, comparisons);
 
         if (status[3:0] !== 4'b0110 || result !== 32'd4) begin
             $display(
@@ -285,12 +292,12 @@ module tb_wb_search_integration;
 
         $display("\nTEST 3: Search for missing key 8");
 
-        wb_write(32'h3000800C, 32'd8);
-        wb_write(32'h30008000, 32'd1);
+        wb_write(32'h5000800C, 32'd8);
+        wb_write(32'h50008000, 32'd1);
 
         wait_for_done();
 
-        wb_read(32'h30008010, result);
+        wb_read(32'h50008010, result);
 
         if (status[3:0] !== 4'b0010 ||
             result !== 32'hFFFFFFFF) begin
@@ -310,12 +317,12 @@ module tb_wb_search_integration;
 
         $display("\nTEST 4: Find negative key -3");
 
-        wb_write(32'h3000800C, -32'sd3);
-        wb_write(32'h30008000, 32'd1);
+        wb_write(32'h5000800C, -32'sd3);
+        wb_write(32'h50008000, 32'd1);
 
         wait_for_done();
 
-        wb_read(32'h30008010, result);
+        wb_read(32'h50008010, result);
 
         if (status[3:0] !== 4'b0110 ||
             result !== 32'd1) begin
@@ -335,10 +342,10 @@ module tb_wb_search_integration;
 
         $display("\nTEST 5: Invalid length 8193");
 
-        wb_write(32'h30008008, 32'd8193);
-        wb_write(32'h30008000, 32'd1);
+        wb_write(32'h50008008, 32'd8193);
+        wb_write(32'h50008000, 32'd1);
 
-        wb_read(32'h30008004, status);
+        wb_read(32'h50008004, status);
 
         if (status[3:1] !== 3'b101) begin
             $display(

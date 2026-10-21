@@ -1,4 +1,3 @@
-```verilog
 module data_memory #(
     parameter MEM_SIZE = 4097,
     // Address used by riscv-tests proxy to report pass/fail

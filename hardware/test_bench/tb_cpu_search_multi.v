@@ -109,10 +109,10 @@ module tb_cpu_search;
         for (i = 0; i < 4097; i = i + 1)
             u_dut.u_imem.mem[i] = 32'h00000013; // ADDI x0,x0,0 (NOP)
 
-        // x1 = 0x30000000 (SEARCH array base)
-        put(0,  {20'h30000, 5'd1, OP_LUI});
-        // x2 = 0x30008000 (SEARCH register page)
-        put(1,  {20'h30008, 5'd2, OP_LUI});
+        // x1 = 0x50000000 (SEARCH array base)
+        put(0,  {20'h50000, 5'd1, OP_LUI});
+        // x2 = 0x50008000 (SEARCH register page)
+        put(1,  {20'h50008, 5'd2, OP_LUI});
         // Sorted signed array: [-8, -3, 2, 7, 12, 19, 25]
         put(2,  enc_i(12'hFF8, 5'd0, 3'b000, 5'd3, OP_IMM)); // addi x3,x0,-8
         put(3,  enc_s(12'd0,  5'd3, 5'd1, 3'b010, OP_STORE));

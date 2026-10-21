@@ -1,30 +1,22 @@
-// mac_driver.vh — CPU-side driver for the MAC accelerator (dot product).
-// Include inside tb_cpu_top after rv32i_asm.vh. Writes straight into the DUT's
-// instruction/data memories, so it must run after their $readmemh (see tb: #1).
+// mac_driver.vh — CPU-side driver for the 4x4 matrix MAC (C = A(4xK) * B(Kx4), K = 4).
+// Include inside tb_cpu_top_wb_mac after rv32i_asm.vh. Writes straight into the DUT's
+// instruction memory, so it must run after its $readmemh (see tb: #1).
 //
-// Computes  dot(A, B) = 1*5 + 2*6 + 3*7 + 4*8 = 70
-//   A[0..3] @ 0x200, B[0..3] @ 0x220   (local data_memory)
-//   MAC BUF_A @ 0x1000_0000, BUF_B @ 0x1000_4000, registers @ 0x1000_8000
-// Result ends up in x17 (ACC_LO) and x18 (ACC_HI), then the core parks at DRV_DONE.
+// The CPU `sw`s A and B into the write-only matrix window at MAT_BASE (0x4000_0000):
+//   A[r][k] at word r*256+k,  B[k][c] at word 1024+4*k+c   (K_MAX = 256)
+// then programs DATA_BASE/K/CTRL, polls STATUS.DONE, reads C[0][0] and C[3][3] into
+// x17/x18 and x19/x20, and DMA-copies all 32 result words (bus slave -> local RAM 0x240).
 //
-// Register use:
-//   x7  MAC register base      x8/x9    source pointers A/B (local RAM)
-//   x10/x11 BUF_A/BUF_B dst pointers   x12  elements left
-//   x13/x14 element temps      x6/x15/x16 scratch (command, status, DONE bit)
+// Register use: x2 DMA base, x3 result base, x4/x5 A-row/B window ptrs, x6/x13 temps,
+//               x7 MAC regs, x15/x16 poll, x1 DMA start/len temps.
 
 localparam DRV_BASE = 32'h0000_00E0;     // right after the 56-instruction base program
-localparam DRV_LEN  = 4;                 // number of elements
-
-// MAC register offsets from x7 (= 0x1000_8000)
-localparam MAC_CTRL   = 12'd0;           // [0]=START [1]=CLR_ACC
-localparam MAC_STATUS = 12'd4;           // [0]=BUSY  [1]=DONE
-localparam MAC_LEN    = 12'd8;
-localparam MAC_ACC_LO = 12'd12;
-localparam MAC_ACC_HI = 12'd16;
+localparam DRV_K    = 4;                 // inner dimension
+localparam RES_RAM  = 32'h0000_0240;     // DMA destination of the 32 result words
 
 integer asm_pc;                          // address the next emit() lands at
-integer L_copy, L_poll, DRV_DONE;        // labels
-integer k;
+integer L_poll, DRV_DONE;                // labels
+integer ar, ak, bk, bc;
 
 task emit (input [31:0] word);
     begin
@@ -33,63 +25,61 @@ task emit (input [31:0] word);
     end
 endtask
 
+// Test matrices (signed, small): A[r][k], B[k][c]
+function integer a_val (input integer r, input integer k); a_val = 3*r - 2*k + 1; endfunction
+function integer b_val (input integer k, input integer c); b_val = 2*k - c - 3;   endfunction
+
 task load_mac_driver;
     begin
         asm_pc = DRV_BASE;
+        emit(LUI (x4, 20'h40000));                       // x4 = &A[0][0] (MAT_BASE)
+        emit(LUI (x5, 20'h40001));                       // x5 = &B[0][0] (MAT_BASE + 4*K_MAX words)
+        for (ar = 0; ar < 4; ar = ar + 1) begin
+            for (ak = 0; ak < DRV_K; ak = ak + 1) begin
+                emit(ADDI(x13, x0, a_val(ar, ak)));
+                emit(SW  (x4, x13, 4*ak));
+            end
+            emit(ADDI(x4, x4, 1024));                    // next A row (K_MAX words)
+        end
+        for (bk = 0; bk < DRV_K; bk = bk + 1)
+            for (bc = 0; bc < 4; bc = bc + 1) begin
+                emit(ADDI(x13, x0, b_val(bk, bc)));
+                emit(SW  (x5, x13, 16*bk + 4*bc));
+            end
 
-        // --- clear the accumulator ---
-        emit(LUI (x7, 20'h10008));                   // x7 = 0x1000_8000 (MAC registers)
-        emit(ADDI(x6, x0, 2));                       // CLR_ACC
-        emit(SW  (x7, x6, MAC_CTRL));
-
-        // --- set up copy pointers ---
-        emit(ADDI(x8,  x0, 12'h200));                // &A (local RAM)
-        emit(ADDI(x9,  x0, 12'h220));                // &B (local RAM)
-        emit(LUI (x10, 20'h10000));                  // &BUF_A (MAC)
-        emit(LUI (x11, 20'h10004));                  // &BUF_B (MAC)
-        emit(ADDI(x12, x0, DRV_LEN));                // elements left
-
-        // --- copy A[i], B[i] into the MAC buffers (local load = 1 cycle, bus store = 3) ---
-        L_copy = asm_pc;
-        emit(LW  (x13, x8,  0));
-        emit(SW  (x10, x13, 0));
-        emit(LW  (x14, x9,  0));
-        emit(SW  (x11, x14, 0));
-        emit(ADDI(x8,  x8,  4));
-        emit(ADDI(x9,  x9,  4));
-        emit(ADDI(x10, x10, 4));
-        emit(ADDI(x11, x11, 4));
-        emit(ADDI(x12, x12, -1));
-        emit(BNE (x12, x0, L_copy - asm_pc));        // loop until x12 == 0
-
-        // --- program length and start ---
-        emit(ADDI(x6, x0, DRV_LEN));
-        emit(SW  (x7, x6, MAC_LEN));
-        emit(ADDI(x6, x0, 1));                       // START
-        emit(SW  (x7, x6, MAC_CTRL));
+        // --- program and start the accelerator ---
+        emit(LUI (x7, 20'h10008));                       // x7 = 0x1000_8000 (MAC regs)
+        emit(LUI (x6, 20'h40000));
+        emit(SW  (x7, x6, 0));                           // DATA_BASE = MAT_BASE
+        emit(ADDI(x6, x0, DRV_K));
+        emit(SW  (x7, x6, 4));                           // K
+        emit(ADDI(x6, x0, 1));
+        emit(SW  (x7, x6, 8));                           // CTRL.START
 
         // --- poll STATUS until DONE (bit 1) ---
         L_poll = asm_pc;
-        emit(LW  (x15, x7,  MAC_STATUS));
+        emit(LW  (x15, x7, 12));
         emit(ANDI(x16, x15, 2));
         emit(BEQ (x16, x0, L_poll - asm_pc));
 
-        // --- read the 64-bit result ---
-        emit(LW  (x17, x7, MAC_ACC_LO));
-        emit(LW  (x18, x7, MAC_ACC_HI));
+        // --- read C[0][0] and C[3][3] (64-bit, lo/hi) ---
+        emit(LUI (x3, 20'h10000));                       // x3 = result window
+        emit(LW  (x17, x3, 0));
+        emit(LW  (x18, x3, 4));
+        emit(LW  (x19, x3, 120));
+        emit(LW  (x20, x3, 124));
 
-        // --- park ---
+        // --- DMA: 32 result words (bus slave) -> local RAM; CPU stalls until done ---
+        emit(LUI (x2, 20'h20000));                       // x2 = DMA base
+        emit(SW  (x2, x3, 0));                           // SRC = 0x1000_0000
+        emit(ADDI(x1, x0, 12'h240));
+        emit(SW  (x2, x1, 4));                           // DST = RES_RAM
+        emit(ADDI(x1, x0, 32));
+        emit(SW  (x2, x1, 8));                           // LEN = 32
+        emit(ADDI(x1, x0, 1));
+        emit(SW  (x2, x1, 12));                          // START
+
         DRV_DONE = asm_pc;
-        emit(JAL (x0, DRV_DONE - asm_pc));           // jump to self
-    end
-endtask
-
-// Input vectors in local data_memory (word index = byte address / 4)
-task load_mac_data;
-    begin
-        for (k = 0; k < DRV_LEN; k = k + 1) begin
-            u_dut.u_mem.memory[32'h200 / 4 + k] = k + 1;   // A = 1,2,3,4
-            u_dut.u_mem.memory[32'h220 / 4 + k] = k + 5;   // B = 5,6,7,8
-        end
+        emit(JAL (x0, 0));                               // park
     end
 endtask
